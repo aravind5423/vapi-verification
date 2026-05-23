@@ -4,11 +4,12 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>AI Phone Verification</title>
+  <meta name="description" content="AI-powered phone verification — confirm identities instantly with an outbound call.">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
     :root {
       --bg: #0a0a0f;
-      --surface: rgba(255, 255, 255, 0.03);
+      --surface: rgba(255, 255, 255, 0.04);
       --surface-border: rgba(255, 255, 255, 0.08);
       --primary: #6366f1;
       --primary-hover: #4f46e5;
@@ -17,13 +18,9 @@
       --success: #10b981;
       --error: #ef4444;
       --warning: #f59e0b;
+      --voicemail: #8b5cf6;
     }
-
-    * {
-      box-sizing: border-box;
-      margin: 0;
-      padding: 0;
-    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
 
     body {
       font-family: 'Inter', sans-serif;
@@ -33,32 +30,24 @@
       justify-content: center;
       align-items: center;
       min-height: 100vh;
-      overflow: hidden;
       position: relative;
+      padding: 20px;
     }
 
-    /* Background effects */
     .blob {
-      position: absolute;
-      width: 600px;
-      height: 600px;
-      background: radial-gradient(circle, rgba(99,102,241,0.15) 0%, rgba(0,0,0,0) 70%);
+      position: fixed;
+      width: 700px; height: 700px;
+      background: radial-gradient(circle, rgba(99,102,241,0.12) 0%, transparent 70%);
       border-radius: 50%;
-      top: -200px;
-      left: -200px;
-      z-index: 0;
+      top: -250px; left: -250px;
       pointer-events: none;
     }
-    
     .blob2 {
-      position: absolute;
-      width: 500px;
-      height: 500px;
-      background: radial-gradient(circle, rgba(16,185,129,0.1) 0%, rgba(0,0,0,0) 70%);
+      position: fixed;
+      width: 600px; height: 600px;
+      background: radial-gradient(circle, rgba(16,185,129,0.08) 0%, transparent 70%);
       border-radius: 50%;
-      bottom: -150px;
-      right: -100px;
-      z-index: 0;
+      bottom: -200px; right: -150px;
       pointer-events: none;
     }
 
@@ -66,93 +55,98 @@
       position: relative;
       z-index: 1;
       width: 100%;
-      max-width: 420px;
+      max-width: 440px;
       padding: 40px;
       background: var(--surface);
       border: 1px solid var(--surface-border);
       border-radius: 24px;
-      backdrop-filter: blur(20px);
-      -webkit-backdrop-filter: blur(20px);
-      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
-      animation: slideUp 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+      backdrop-filter: blur(24px);
+      -webkit-backdrop-filter: blur(24px);
+      box-shadow: 0 32px 64px -12px rgba(0,0,0,0.6);
+      animation: slideUp 0.5s cubic-bezier(0.16, 1, 0.3, 1);
     }
 
     @keyframes slideUp {
-      from { opacity: 0; transform: translateY(20px); }
-      to { opacity: 1; transform: translateY(0); }
+      from { opacity: 0; transform: translateY(24px); }
+      to   { opacity: 1; transform: translateY(0); }
     }
 
-    .header {
-      text-align: center;
-      margin-bottom: 32px;
-    }
+    .header { text-align: center; margin-bottom: 32px; }
 
     .badge {
       display: inline-flex;
       align-items: center;
-      padding: 4px 12px;
-      background: rgba(99, 102, 241, 0.1);
+      gap: 6px;
+      padding: 5px 14px;
+      background: rgba(99,102,241,0.12);
       color: #818cf8;
       border-radius: 20px;
-      font-size: 12px;
-      font-weight: 600;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 1px;
+      text-transform: uppercase;
       margin-bottom: 16px;
-      letter-spacing: 0.5px;
-      border: 1px solid rgba(99, 102, 241, 0.2);
+      border: 1px solid rgba(99,102,241,0.2);
+    }
+    .badge::before {
+      content: '';
+      width: 6px; height: 6px;
+      background: #6366f1;
+      border-radius: 50%;
+      animation: badgePulse 2s ease-in-out infinite;
+    }
+    @keyframes badgePulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
     }
 
-    h1 {
-      font-size: 24px;
-      font-weight: 600;
-      margin-bottom: 8px;
-      letter-spacing: -0.5px;
-    }
+    h1 { font-size: 26px; font-weight: 700; margin-bottom: 8px; letter-spacing: -0.5px; }
 
-    p.subtitle {
-      color: var(--text-muted);
-      font-size: 14px;
-      line-height: 1.5;
-    }
+    p.subtitle { color: var(--text-muted); font-size: 14px; line-height: 1.6; }
 
-    .form-group {
-      margin-bottom: 20px;
-    }
+    .form-group { margin-bottom: 18px; }
 
     label {
-      display: block;
+      display: flex;
+      justify-content: space-between;
       font-size: 13px;
       font-weight: 500;
       margin-bottom: 8px;
       color: var(--text-muted);
     }
+    .label-hint { font-size: 11px; color: rgba(255,255,255,0.25); font-weight: 400; }
 
     input {
       width: 100%;
       padding: 14px 16px;
-      background: rgba(0, 0, 0, 0.2);
+      background: rgba(0,0,0,0.25);
       border: 1px solid var(--surface-border);
       border-radius: 12px;
       color: white;
       font-size: 15px;
       font-family: inherit;
-      transition: all 0.2s ease;
+      transition: border-color 0.2s, box-shadow 0.2s, background 0.2s;
       outline: none;
     }
-
     input:focus {
       border-color: var(--primary);
-      box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15);
-      background: rgba(0, 0, 0, 0.3);
+      box-shadow: 0 0 0 3px rgba(99,102,241,0.15);
+      background: rgba(0,0,0,0.35);
+    }
+    input::placeholder { color: rgba(255,255,255,0.18); }
+    input.error-input { border-color: var(--error); }
+
+    .field-error {
+      font-size: 12px;
+      color: var(--error);
+      margin-top: 6px;
+      display: none;
     }
 
-    input::placeholder {
-      color: rgba(255, 255, 255, 0.2);
-    }
-
-    button {
+    button#submitBtn {
       width: 100%;
       padding: 16px;
-      background: var(--primary);
+      background: linear-gradient(135deg, #6366f1, #4f46e5);
       color: white;
       border: none;
       border-radius: 12px;
@@ -165,246 +159,362 @@
       position: relative;
       overflow: hidden;
     }
-
-    button:hover {
-      background: var(--primary-hover);
+    button#submitBtn:hover:not(:disabled) {
       transform: translateY(-1px);
-      box-shadow: 0 10px 20px -10px rgba(99, 102, 241, 0.5);
+      box-shadow: 0 12px 24px -8px rgba(99,102,241,0.5);
     }
+    button#submitBtn:active:not(:disabled) { transform: translateY(1px); }
+    button#submitBtn:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
 
-    button:active {
-      transform: translateY(1px);
-    }
-
-    button:disabled {
-      opacity: 0.7;
-      cursor: not-allowed;
-      transform: none;
-    }
-
-    .loader {
-      display: none;
-      width: 20px;
-      height: 20px;
-      border: 2px solid rgba(255,255,255,0.3);
-      border-radius: 50%;
-      border-top-color: white;
-      animation: spin 0.8s linear infinite;
-      position: absolute;
-      top: 50%;
-      left: 50%;
-      margin-top: -10px;
-      margin-left: -10px;
-    }
-
-    @keyframes spin {
-      to { transform: rotate(360deg); }
-    }
-
-    /* Status UI */
-    .status-card {
-      display: none;
-      margin-top: 24px;
-      padding: 20px;
-      border-radius: 16px;
-      background: rgba(0,0,0,0.2);
-      border: 1px solid var(--surface-border);
-      animation: fadeIn 0.4s ease;
-    }
-
-    @keyframes fadeIn {
-      from { opacity: 0; transform: scale(0.95); }
-      to { opacity: 1; transform: scale(1); }
-    }
-
-    .status-header {
+    .btn-inner {
       display: flex;
       align-items: center;
-      gap: 12px;
-      margin-bottom: 8px;
+      justify-content: center;
+      gap: 10px;
+      transition: opacity 0.15s;
     }
 
-    .status-dot {
-      width: 10px;
-      height: 10px;
+    .spinner {
+      display: none;
+      width: 18px; height: 18px;
+      border: 2px solid rgba(255,255,255,0.3);
+      border-top-color: white;
       border-radius: 50%;
-      background: var(--text-muted);
+      animation: spin 0.7s linear infinite;
     }
-    
-    .status-dot.pulse {
-      background: var(--warning);
-      box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.4);
-      animation: pulseWarning 1.5s infinite cubic-bezier(0.66, 0, 0, 1);
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Status Card ── */
+    .status-card {
+      display: none;
+      margin-top: 20px;
+      padding: 20px;
+      border-radius: 16px;
+      background: rgba(0,0,0,0.25);
+      border: 1px solid var(--surface-border);
+      animation: fadeIn 0.35s ease;
+      transition: border-color 0.4s;
+    }
+    .status-card.state-success { border-color: rgba(16,185,129,0.3); background: rgba(16,185,129,0.05); }
+    .status-card.state-error   { border-color: rgba(239,68,68,0.3);  background: rgba(239,68,68,0.05); }
+    .status-card.state-voicemail { border-color: rgba(139,92,246,0.3); background: rgba(139,92,246,0.05); }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: scale(0.97); }
+      to   { opacity: 1; transform: scale(1); }
     }
 
-    @keyframes pulseWarning {
-      to { box-shadow: 0 0 0 10px rgba(245, 158, 11, 0); }
-    }
+    .status-header { display: flex; align-items: center; gap: 12px; margin-bottom: 6px; }
 
-    .status-dot.success { background: var(--success); }
-    .status-dot.error { background: var(--error); }
-
-    .status-title {
-      font-weight: 600;
+    .status-icon {
+      width: 32px; height: 32px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
       font-size: 15px;
+      flex-shrink: 0;
+    }
+    .status-icon.pending  { background: rgba(245,158,11,0.15); animation: iconPulse 1.5s infinite; }
+    .status-icon.success  { background: rgba(16,185,129,0.15); }
+    .status-icon.error    { background: rgba(239,68,68,0.15); }
+    .status-icon.voicemail{ background: rgba(139,92,246,0.15); }
+
+    @keyframes iconPulse {
+      0%,100% { box-shadow: 0 0 0 0 rgba(245,158,11,0.4); }
+      50%     { box-shadow: 0 0 0 8px rgba(245,158,11,0); }
     }
 
-    .status-message {
-      font-size: 13px;
-      color: var(--text-muted);
-      margin-left: 22px;
+    .status-title   { font-weight: 600; font-size: 15px; }
+    .status-message { font-size: 13px; color: var(--text-muted); margin-left: 44px; margin-bottom: 14px; line-height: 1.5; }
+
+    .divider { height: 1px; background: var(--surface-border); margin: 14px 0; }
+
+    .outcome-badge {
+      display: none;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      font-weight: 600;
+      padding: 6px 12px;
+      border-radius: 8px;
+      width: fit-content;
+      margin-bottom: 14px;
+      margin-left: 44px;
     }
+    .outcome-badge.show { display: flex; }
+    .outcome-badge.P1 { background: rgba(16,185,129,0.15); color: #10b981; }
+    .outcome-badge.P2 { background: rgba(139,92,246,0.15); color: #8b5cf6; }
+    .outcome-badge.P3 { background: rgba(239,68,68,0.15);  color: #ef4444; }
+    .outcome-badge.P4 { background: rgba(245,158,11,0.15); color: #f59e0b; }
+
+    .retry-btn {
+      display: none;
+      width: 100%;
+      padding: 12px;
+      background: transparent;
+      border: 1px solid var(--surface-border);
+      border-radius: 10px;
+      color: var(--text-muted);
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      font-family: inherit;
+      margin-top: 4px;
+      transition: all 0.2s;
+    }
+    .retry-btn:hover { border-color: rgba(255,255,255,0.2); color: white; background: rgba(255,255,255,0.05); }
+    .retry-btn.show { display: block; }
 
     .log-box {
-      margin-top: 16px;
-      padding: 12px;
-      background: rgba(0,0,0,0.4);
-      border-radius: 8px;
-      font-family: monospace;
-      font-size: 12px;
-      color: var(--text-muted);
+      font-family: 'JetBrains Mono', 'Fira Code', monospace;
+      font-size: 11px;
+      color: rgba(255,255,255,0.3);
       white-space: pre-wrap;
-      max-height: 100px;
+      line-height: 1.7;
+      max-height: 80px;
       overflow-y: auto;
     }
+    .log-box:empty { display: none; }
   </style>
 </head>
 <body>
-
   <div class="blob"></div>
   <div class="blob2"></div>
 
   <div class="container">
     <div class="header">
-      <div class="badge">LIVE DEMO</div>
+      <div class="badge">Live Demo</div>
       <h1>AI Verification</h1>
-      <p class="subtitle">Enter your details to receive an AI-powered verification phone call.</p>
+      <p class="subtitle">Enter the details below to trigger an AI-powered identity verification call.</p>
     </div>
 
-    <form id="verifyForm">
+    <form id="verifyForm" novalidate>
       <div class="form-group">
-        <label for="name">Full Name</label>
-        <input type="text" id="name" placeholder="e.g. John Doe" required autocomplete="name">
+        <label for="name">
+          Full Name
+        </label>
+        <input type="text" id="name" placeholder="e.g. John Doe" autocomplete="name">
+        <div class="field-error" id="nameError">Please enter the person's name.</div>
       </div>
-      
+
       <div class="form-group">
-        <label for="phone">Phone Number</label>
-        <input type="tel" id="phone" placeholder="e.g. +16818801165" required>
+        <label for="phone">
+          Phone Number
+          <span class="label-hint">Include country code</span>
+        </label>
+        <input type="tel" id="phone" placeholder="e.g. +16818801165">
+        <div class="field-error" id="phoneError">Enter a valid number with country code (e.g. +1...).</div>
       </div>
 
       <button type="submit" id="submitBtn">
-        <span id="btnText">Verify Me Now</span>
-        <div class="loader" id="btnLoader"></div>
+        <div class="btn-inner" id="btnInner">
+          <span id="btnText">Verify Now</span>
+          <div class="spinner" id="spinner"></div>
+        </div>
       </button>
     </form>
 
     <div class="status-card" id="statusCard">
       <div class="status-header">
-        <div class="status-dot pulse" id="statusDot"></div>
-        <div class="status-title" id="statusTitle">Connecting...</div>
+        <div class="status-icon pending" id="statusIcon">📞</div>
+        <div class="status-title" id="statusTitle">Calling...</div>
       </div>
-      <div class="status-message" id="statusMessage">Initiating call to your phone</div>
+      <div class="status-message" id="statusMessage">Your phone will ring shortly. Please answer.</div>
+
+      <div class="outcome-badge" id="outcomeBadge"></div>
+
+      <div class="divider" id="logDivider"></div>
       <div class="log-box" id="logBox"></div>
+
+      <button class="retry-btn" id="retryBtn" type="button">↩ Start a new verification</button>
     </div>
   </div>
 
   <script>
-    const form = document.getElementById('verifyForm');
-    const submitBtn = document.getElementById('submitBtn');
-    const btnText = document.getElementById('btnText');
-    const btnLoader = document.getElementById('btnLoader');
-    const statusCard = document.getElementById('statusCard');
-    const statusDot = document.getElementById('statusDot');
+    const form        = document.getElementById('verifyForm');
+    const submitBtn   = document.getElementById('submitBtn');
+    const btnText     = document.getElementById('btnText');
+    const spinner     = document.getElementById('spinner');
+    const statusCard  = document.getElementById('statusCard');
+    const statusIcon  = document.getElementById('statusIcon');
     const statusTitle = document.getElementById('statusTitle');
-    const statusMessage = document.getElementById('statusMessage');
-    const logBox = document.getElementById('logBox');
+    const statusMsg   = document.getElementById('statusMessage');
+    const logBox      = document.getElementById('logBox');
+    const outcomeBadge= document.getElementById('outcomeBadge');
+    const retryBtn    = document.getElementById('retryBtn');
+    const nameInput   = document.getElementById('name');
+    const phoneInput  = document.getElementById('phone');
+    const nameError   = document.getElementById('nameError');
+    const phoneError  = document.getElementById('phoneError');
 
-    let pollInterval = null;
+    let pollInterval  = null;
+    let pollTimeout   = null;
+    const MAX_POLL_MS = 120000; // 2 minutes max wait
+
+    // ── Outcome display config ───────────────────────────────────────────────
+    const OUTCOME_CONFIG = {
+      P1_SUCCESS:    { label: 'P1 — Identity Confirmed',   cls: 'P1', icon: '✅', cardState: 'success',  title: 'Verification Successful', msg: 'The person confirmed their identity.' },
+      P2_VOICEMAIL:  { label: 'P2 — Voicemail Detected',  cls: 'P2', icon: '📬', cardState: 'voicemail',title: 'Reached Voicemail',        msg: 'The number matched the voicemail greeting.' },
+      P3_UNREACHABLE:{ label: 'P3 — Unreachable',         cls: 'P3', icon: '📵', cardState: 'error',    title: 'Number Unreachable',      msg: 'The call could not connect. Check the number.' },
+      P4_UNCLEAR:    { label: 'P4 — Unclear / Uncooperative', cls: 'P4', icon: '❓', cardState: 'error', title: 'Could Not Verify',        msg: 'The person did not confirm their identity.' },
+    };
 
     function log(msg) {
-      const time = new Date().toLocaleTimeString();
-      logBox.textContent += `[${time}] ${msg}\n`;
+      const t = new Date().toLocaleTimeString('en-US', { hour12: false });
+      logBox.textContent += `[${t}] ${msg}\n`;
       logBox.scrollTop = logBox.scrollHeight;
     }
 
-    function setStatus(state, title, message) {
-      statusDot.className = 'status-dot';
-      if (state === 'pending') statusDot.classList.add('pulse');
-      if (state === 'success') statusDot.classList.add('success');
-      if (state === 'error') statusDot.classList.add('error');
-      
+    function setStatus(iconEmoji, iconClass, title, msg, cardStateClass) {
+      statusIcon.textContent  = iconEmoji;
+      statusIcon.className    = `status-icon ${iconClass}`;
       statusTitle.textContent = title;
-      statusMessage.textContent = message;
+      statusMsg.textContent   = msg;
+      statusCard.className    = `status-card ${cardStateClass ? 'state-' + cardStateClass : ''}`;
+    }
+
+    function stopPolling() {
+      if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
+      if (pollTimeout)  { clearTimeout(pollTimeout);   pollTimeout  = null; }
+    }
+
+    function resetForm() {
+      stopPolling();
+      submitBtn.disabled  = false;
+      btnText.textContent = 'Verify Now';
+      spinner.style.display = 'none';
+      statusCard.style.display = 'none';
+      outcomeBadge.className = 'outcome-badge';
+      outcomeBadge.textContent = '';
+      retryBtn.className = 'retry-btn';
+      logBox.textContent = '';
+      nameError.style.display = 'none';
+      phoneError.style.display = 'none';
+      nameInput.classList.remove('error-input');
+      phoneInput.classList.remove('error-input');
+    }
+
+    retryBtn.addEventListener('click', resetForm);
+
+    function showCompletion(data) {
+      stopPolling();
+      submitBtn.disabled    = false;
+      btnText.textContent   = 'Verify Now';
+      spinner.style.display = 'none';
+
+      const cfg = OUTCOME_CONFIG[data.outcome] || OUTCOME_CONFIG['P4_UNCLEAR'];
+
+      setStatus(cfg.icon, cfg.cardState, cfg.title, cfg.msg, cfg.cardState);
+
+      outcomeBadge.textContent = cfg.label;
+      outcomeBadge.className   = `outcome-badge show ${cfg.cls}`;
+
+      log(`Outcome: ${data.outcome} | Result: ${data.result}`);
+      if (data.failReason) log(`Reason: ${data.failReason}`);
+
+      retryBtn.className = 'retry-btn show';
     }
 
     async function pollResult(callId) {
       try {
-        const res = await fetch(`/api/result?call_id=${callId}`);
+        const res  = await fetch(`/api/result?call_id=${callId}`);
         const data = await res.json();
-        
-        log(`Status: ${data.status} | Result: ${data.result || 'none'}`);
 
         if (data.status === 'completed') {
-          clearInterval(pollInterval);
-          submitBtn.disabled = false;
-          btnText.style.opacity = 1;
-          btnLoader.style.display = 'none';
-
-          if (data.result === 'success') {
-            setStatus('success', 'Verification Successful!', 'Identity confirmed successfully.');
-            log(`Outcome: ${data.outcome} - Passed!`);
-          } else {
-            setStatus('error', 'Verification Failed', 'Identity could not be confirmed.');
-            log(`Outcome: ${data.outcome} - Failed!`);
-          }
+          showCompletion(data);
+        } else if (data.status === 'not_found') {
+          log('Call record not found — retrying...');
         }
+        // else: still pending, keep polling
       } catch (err) {
         log(`Poll error: ${err.message}`);
       }
     }
 
+    function validateInputs(name, phone) {
+      let ok = true;
+      nameError.style.display  = 'none';
+      phoneError.style.display = 'none';
+      nameInput.classList.remove('error-input');
+      phoneInput.classList.remove('error-input');
+
+      if (!name.trim()) {
+        nameError.style.display = 'block';
+        nameInput.classList.add('error-input');
+        ok = false;
+      }
+      // Accept E.164 or common formatted numbers (+1 (xxx) xxx-xxxx, etc.)
+      const cleaned = phone.replace(/[\s\-\(\)\.]/g, '');
+      if (!/^\+\d{7,15}$/.test(cleaned)) {
+        phoneError.style.display = 'block';
+        phoneInput.classList.add('error-input');
+        ok = false;
+      }
+      return ok;
+    }
+
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
-      
-      const name = document.getElementById('name').value;
-      const phone = document.getElementById('phone').value;
 
-      // UI Reset
-      submitBtn.disabled = true;
-      btnText.style.opacity = 0;
-      btnLoader.style.display = 'block';
+      const name  = nameInput.value.trim();
+      const phone = phoneInput.value.trim();
+
+      if (!validateInputs(name, phone)) return;
+
+      // ── Reset & show loading ─────────────────────────────────────────────
+      stopPolling();
+      submitBtn.disabled    = true;
+      btnText.textContent   = 'Calling...';
+      spinner.style.display = 'block';
+      outcomeBadge.className = 'outcome-badge';
+      retryBtn.className    = 'retry-btn';
+      logBox.textContent    = '';
       statusCard.style.display = 'block';
-      logBox.textContent = '';
-      if(pollInterval) clearInterval(pollInterval);
-      
-      setStatus('pending', 'Calling...', 'Please answer your phone.');
-      log(`Triggering call to ${phone} for ${name}...`);
+      statusCard.className  = 'status-card';
+
+      setStatus('📞', 'pending', 'Calling...', 'Your phone will ring shortly. Please answer.');
+      log(`Initiating call → ${phone} (${name})`);
 
       try {
-        const res = await fetch('/api/trigger', {
+        const res  = await fetch('/api/trigger', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ name, phone_number: phone })
         });
-        
         const data = await res.json();
-        
+
         if (!data.success) {
-          throw new Error(data.error || 'Failed to trigger call');
+          // Surface friendly error messages
+          let userErr = data.error || 'Call failed to start.';
+          if (userErr.includes('international')) userErr = 'International calls are not supported on the current plan.';
+          if (userErr.includes('daily') || userErr.includes('limit')) userErr = 'Daily call limit reached. Please try again tomorrow.';
+          throw new Error(userErr);
         }
 
-        log(`Call fired! ID: ${data.call_id}`);
-        log('Waiting for outcome...');
-        
-        // Start polling
+        log(`Call started — ID: ${data.call_id.slice(0,8)}...`);
+        setStatus('📞', 'pending', 'Ringing...', 'Answer the call and follow the AI\'s instructions.');
+
+        // ── Start polling with a hard timeout ────────────────────────────
         pollInterval = setInterval(() => pollResult(data.call_id), 3000);
+        pollTimeout  = setTimeout(() => {
+          stopPolling();
+          log('Timed out waiting for result (2 min). Please refresh and try again.');
+          setStatus('⏰', 'error', 'Timed Out', 'No response received within 2 minutes. Please try again.');
+          outcomeBadge.textContent = 'P3 — Timeout / No Answer';
+          outcomeBadge.className   = 'outcome-badge show P3';
+          submitBtn.disabled    = false;
+          btnText.textContent   = 'Verify Now';
+          spinner.style.display = 'none';
+          retryBtn.className    = 'retry-btn show';
+        }, MAX_POLL_MS);
 
       } catch (err) {
-        setStatus('error', 'Error', err.message);
+        setStatus('⚠️', 'error', 'Error', err.message, 'error');
         log(`Error: ${err.message}`);
-        submitBtn.disabled = false;
-        btnText.style.opacity = 1;
-        btnLoader.style.display = 'none';
+        submitBtn.disabled    = false;
+        btnText.textContent   = 'Verify Now';
+        spinner.style.display = 'none';
       }
     });
   </script>

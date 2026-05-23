@@ -3,24 +3,22 @@
  * ---------------------------------------------------------------------------
  * POST /api/webhook
  *
- * Receives Vapi call lifecycle events and function-call callbacks.
+ * Receives ALL Vapi call lifecycle events and tool-call callbacks.
  *
- * Handled event types:
- *   ┌─────────────────┬──────────────────────────────────────────────────────┐
- *   │ call-started    │ Mark call as in_progress                             │
- *   │ function-call   │ If name === "set_outcome", persist outcome code      │
- *   │ call-ended      │ Finalise result from stored outcome                  │
- *   │ call-failed     │ Store P3_UNREACHABLE, mark completed                 │
- *   └─────────────────┴──────────────────────────────────────────────────────┘
+ * Event types handled:
+ *   call-started          → Mark call as in_progress
+ *   tool-calls            → Modern Vapi: parse set_outcome from toolCallList
+ *   function-call         → Legacy Vapi: parse set_outcome from functionCall
+ *   status-update(ended)  → Finalise result using stored outcome
+ *   end-of-call-report    → Finalise result using stored outcome (duplicate guard)
+ *   call-ended            → Same as above
+ *   call-failed           → Mark as P3_UNREACHABLE / completed
  *
- * Outcome → result mapping:
- *   P1_SUCCESS  → "success"
- *   P2_VOICEMAIL → "fail"   (change to "voicemail" if your product needs it)
- *   P3_UNREACHABLE → "fail"
- *   P4_UNCLEAR  → "fail"
- *
- * IMPORTANT: Vapi requires a 200 response with { result } for function-call
- * events, otherwise it retries and the assistant stalls.
+ * Outcome → binary result:
+ *   P1_SUCCESS    → "success"
+ *   P2_VOICEMAIL  → "voicemail"  (distinct from fail — caller's choice)
+ *   P3_UNREACHABLE→ "fail"
+ *   P4_UNCLEAR    → "fail"
  * ---------------------------------------------------------------------------
  */
 
@@ -28,15 +26,12 @@ import { get, set, patch } from "../lib/outcomeStore.js";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-/** Map an outcome code to a binary result string. */
 function outcomeToResult(outcome) {
-  return outcome === "P1_SUCCESS" ? "success" : "fail";
+  if (outcome === "P1_SUCCESS")   return "success";
+  if (outcome === "P2_VOICEMAIL") return "voicemail";
+  return "fail";
 }
 
-/**
- * Safely extract the call ID from wherever Vapi puts it in the event body.
- * Vapi message shapes vary slightly between event types.
- */
 function extractCallId(message) {
   return (
     message?.call?.id ??
@@ -46,24 +41,28 @@ function extractCallId(message) {
   );
 }
 
+function safeParseArgs(raw) {
+  if (!raw) return {};
+  if (typeof raw === "string") {
+    try { return JSON.parse(raw); } catch { return {}; }
+  }
+  return raw;
+}
+
 // ─── Handler ─────────────────────────────────────────────────────────────────
 export default async function handler(req, res) {
-  // Only accept POST
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
-  // Vapi sends the payload directly as the body (or wrapped in { message })
-  const body = req.body ?? {};
-  // Support both top-level and { message: … } envelope
+  const body    = req.body ?? {};
   const message = body.message ?? body;
-
   const eventType = message?.type;
-  const callId = extractCallId(message);
+  const callId    = extractCallId(message);
 
   console.log(`[webhook] event=${eventType} call_id=${callId}`);
 
-  // ── call-started ─────────────────────────────────────────────────────────
+  // ── call-started ───────────────────────────────────────────────────────────
   if (eventType === "call-started") {
     if (callId) {
       await patch(callId, { status: "in_progress", startedAt: new Date().toISOString() });
@@ -71,69 +70,62 @@ export default async function handler(req, res) {
     return res.status(200).json({ received: true });
   }
 
-  // ── tool-calls (modern Vapi) OR function-call (legacy) ───────────────────
-  if (eventType === "function-call" || eventType === "tool-calls") {
-    let functionName = null;
-    let parsedParams = {};
+  // ── tool-calls (modern Vapi) ───────────────────────────────────────────────
+  if (eventType === "tool-calls") {
+    const toolCallList = message?.toolCallList ?? [];
 
-    if (eventType === "function-call") {
-      // Legacy shape: message.functionCall.name / .parameters
-      const functionCall =
-        message?.functionCall ?? message?.function_call ?? message?.toolCall ?? null;
-      functionName = functionCall?.name ?? functionCall?.function?.name ?? null;
-      let parameters = functionCall?.parameters ?? functionCall?.arguments ?? {};
-      if (typeof parameters === "string") {
-        try { parsedParams = JSON.parse(parameters); } catch { parsedParams = {}; }
-      } else {
-        parsedParams = parameters;
-      }
-    } else {
-      // Modern shape: message.toolCallList[0].function.name / .arguments
-      const toolCallList = message?.toolCallList ?? [];
-      const firstTool = toolCallList[0] ?? null;
-      functionName = firstTool?.function?.name ?? firstTool?.name ?? null;
-      let args = firstTool?.function?.arguments ?? firstTool?.arguments ?? firstTool?.parameters ?? {};
-      if (typeof args === "string") {
-        try { parsedParams = JSON.parse(args); } catch { parsedParams = {}; }
-      } else {
-        parsedParams = args;
+    for (const tool of toolCallList) {
+      const name = tool?.function?.name ?? tool?.name;
+      const args = safeParseArgs(tool?.function?.arguments ?? tool?.arguments ?? tool?.parameters);
+
+      console.log(`[webhook] tool-call → name=${name} args=${JSON.stringify(args)} call_id=${callId}`);
+
+      if (name === "set_outcome") {
+        const outcome = args?.outcome ?? "P4_UNCLEAR";
+        const result  = outcomeToResult(outcome);
+        if (callId) await patch(callId, { outcome, result });
+        console.log(`[webhook] set_outcome → ${outcome} / ${result} call_id=${callId}`);
+        // Vapi requires 200 + { result } to proceed
+        return res.status(200).json({ results: [{ toolCallId: tool?.id, result: outcome }] });
       }
     }
 
-    console.log(`[webhook] tool/function call → name=${functionName} params=${JSON.stringify(parsedParams)} call_id=${callId}`);
+    return res.status(200).json({ results: [] });
+  }
 
-    if (functionName === "set_outcome") {
-      const outcome = parsedParams?.outcome ?? "P4_UNCLEAR";
-      const result = outcomeToResult(outcome);
+  // ── function-call (legacy Vapi) ────────────────────────────────────────────
+  if (eventType === "function-call") {
+    const fc   = message?.functionCall ?? message?.function_call ?? null;
+    const name = fc?.name ?? fc?.function?.name ?? null;
+    const args = safeParseArgs(fc?.parameters ?? fc?.arguments ?? {});
 
-      console.log(`[webhook] set_outcome → outcome=${outcome} result=${result} call_id=${callId}`);
+    console.log(`[webhook] function-call → name=${name} args=${JSON.stringify(args)} call_id=${callId}`);
 
-      if (callId) {
-        await patch(callId, { outcome, result });
-      }
-
-      // Vapi REQUIRES a 200 with { result } to acknowledge tool/function calls
+    if (name === "set_outcome") {
+      const outcome = args?.outcome ?? "P4_UNCLEAR";
+      const result  = outcomeToResult(outcome);
+      if (callId) await patch(callId, { outcome, result });
+      console.log(`[webhook] set_outcome (legacy) → ${outcome} / ${result} call_id=${callId}`);
       return res.status(200).json({ result: outcome });
     }
 
-    // Unknown function — acknowledge so Vapi doesn't retry
     return res.status(200).json({ result: "unhandled_function" });
   }
 
-  // ── call-ended / status-update / end-of-call-report ──────────────────────
-  const isCallEndedEvent = 
-    eventType === "call-ended" || 
-    eventType === "end-of-call-report" || 
+  // ── call-ended / status-update(ended) / end-of-call-report ────────────────
+  const isEndEvent =
+    eventType === "call-ended" ||
+    eventType === "end-of-call-report" ||
     (eventType === "status-update" && message?.status === "ended");
 
-  if (isCallEndedEvent) {
+  if (isEndEvent) {
     if (callId) {
       const stored = (await get(callId)) ?? {};
-      
-      // If already completed by another event, just ack
+
       if (!stored.completed) {
-        const finalResult = stored?.result ?? "fail";
-        const outcome = stored?.outcome ?? "P4_UNCLEAR";
+        const outcome     = stored?.outcome ?? "P4_UNCLEAR";
+        const finalResult = stored?.result  ?? outcomeToResult(outcome);
+        const endedReason = message?.endedReason ?? message?.call?.endedReason ?? null;
 
         await set(callId, {
           ...stored,
@@ -142,11 +134,12 @@ export default async function handler(req, res) {
           finalResult,
           completed: true,
           completedAt: new Date().toISOString(),
+          endedReason,
         });
 
-        console.log(
-          `[webhook] call ended event (${eventType}) → call_id=${callId} outcome=${outcome} finalResult=${finalResult}`
-        );
+        console.log(`[webhook] call ended (${eventType}) → ${outcome} / ${finalResult} | reason=${endedReason} call_id=${callId}`);
+      } else {
+        console.log(`[webhook] call already completed, skipping duplicate end event (${eventType}) call_id=${callId}`);
       }
     }
     return res.status(200).json({ received: true });
@@ -156,23 +149,23 @@ export default async function handler(req, res) {
   if (eventType === "call-failed") {
     if (callId) {
       const stored = (await get(callId)) ?? {};
-      await set(callId, {
-        ...stored,
-        status: "completed",
-        outcome: "P3_UNREACHABLE",
-        finalResult: "fail",
-        completed: true,
-        completedAt: new Date().toISOString(),
-        failReason: message?.endedReason ?? message?.error ?? "unknown",
-      });
-
-      console.log(`[webhook] call-failed → call_id=${callId} result=fail`);
+      if (!stored.completed) {
+        const failReason = message?.endedReason ?? message?.error ?? "unknown";
+        await set(callId, {
+          ...stored,
+          status: "completed",
+          outcome: "P3_UNREACHABLE",
+          finalResult: "fail",
+          completed: true,
+          completedAt: new Date().toISOString(),
+          failReason,
+        });
+        console.log(`[webhook] call-failed → P3_UNREACHABLE reason=${failReason} call_id=${callId}`);
+      }
     }
     return res.status(200).json({ received: true });
   }
 
-  // ── speech-update, transcript, hang, status-update, etc. ──────────────────
-  // Acknowledge silently — we don't need to act on these
-  console.log(`[webhook] unhandled event type: ${eventType}`);
+  // ── Everything else: ack silently ─────────────────────────────────────────
   return res.status(200).json({ received: true });
 }
