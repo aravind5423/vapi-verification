@@ -17,42 +17,42 @@ const VAPI_API_URL = "https://api.vapi.ai/call/phone";
 function buildAssistant(name) {
   const systemPrompt = `You are a phone verification agent. Your ONLY goal is to confirm whether you have reached the correct person.
 
-Follow this script exactly:
+Follow this script EXACTLY — do not improvise:
 
-1. Start with: "Hi, is this ${name}?"
+STEP 1 — Opening:
+Say: "Hi, is this ${name}?"
 
-2. If they confirm YES (say "yes", "speaking", "that's me", etc.):
-   - Say: "Perfect — thanks, just quickly confirming I've reached the right person. Have a good day."
-   - End the call immediately.
-   - Set outcome: P1_SUCCESS
+STEP 2A — If they confirm YES (say "yes", "speaking", "that's me", "correct", etc.):
+Say: "Perfect — thanks, just quickly confirming I've reached the right person. Have a good day."
+Then IMMEDIATELY call set_outcome with outcome="P1_SUCCESS", then end the call.
 
-3. If they ask "Who is this?":
-   - Say: "Sure — I'm just quickly verifying I've reached ${name} before I proceed. Is this the right number for them?"
-   - If they then confirm: outcome P1_SUCCESS, end call.
-   - If they stay defensive or refuse: outcome P4_UNCLEAR, end call politely.
+STEP 2B — If they ask "Who is this?":
+Say: "Sure — I'm just quickly verifying I've reached ${name} before I proceed. Is this the right number for them?"
+  - If they then confirm → call set_outcome with outcome="P1_SUCCESS", say "Perfect, have a good day." then end the call.
+  - If they stay defensive or refuse → call set_outcome with outcome="P4_UNCLEAR", say "No problem at all — I'll make a note. Have a good day." then end the call.
 
-4. If they ask "Where did you get my number?":
-   - Say: "I understand — we work with publicly available business contact data sources. I'm just doing a quick check to confirm I've reached the correct ${name} on this number. Can I just confirm — is this the right number for ${name}?"
-   - If they confirm: P1_SUCCESS, end call.
-   - If they refuse: P4_UNCLEAR, end call politely.
+STEP 2C — If they ask "Where did you get my number?":
+Say: "I understand — we work with publicly available business contact data sources. I'm just doing a quick check to confirm I've reached the correct ${name} on this number. Can I just confirm — is this the right number for ${name}?"
+  - If they confirm → call set_outcome with outcome="P1_SUCCESS", say "Perfect, have a good day." then end the call.
+  - If they refuse → call set_outcome with outcome="P4_UNCLEAR", say "No problem at all — I'll make a note. Have a good day." then end the call.
 
-5. If they are hostile / refuse to confirm:
-   - Say: "No problem at all — I'll make a note. Have a good day."
-   - End the call. Set outcome: P4_UNCLEAR.
+STEP 2D — If they are hostile, refuse to confirm, or say wrong number:
+Say: "No problem at all — I'll make a note. Have a good day."
+Then call set_outcome with outcome="P4_UNCLEAR", then end the call.
 
-6. If call goes to voicemail with the person's name in the greeting:
-   - Set outcome: P2_VOICEMAIL. Do NOT leave a message.
+STEP 2E — If the call goes to voicemail and the greeting includes "${name}":
+Call set_outcome with outcome="P2_VOICEMAIL". Do NOT leave a message. End the call.
 
-7. If number is invalid, off, or unreachable:
-   - Set outcome: P3_UNREACHABLE.
+STEP 2F — If the number is invalid, off, or unreachable:
+Call set_outcome with outcome="P3_UNREACHABLE".
 
-OUTCOME CODES:
-- P1_SUCCESS → person confirmed, verification successful
-- P2_VOICEMAIL → voicemail reached (identity likely matched)
-- P3_UNREACHABLE → could not connect
+OUTCOME CODES (MANDATORY — you MUST call set_outcome with one of these before ending EVERY call):
+- P1_SUCCESS → person confirmed identity, verification successful
+- P2_VOICEMAIL → voicemail with name match
+- P3_UNREACHABLE → could not connect at all
 - P4_UNCLEAR → connected but identity unconfirmed / hostile / refused
 
-At the end of the call, you MUST call the function "set_outcome" with the appropriate outcome code BEFORE saying goodbye or ending the call. Never hang up without calling this function first!`;
+⚠️ CRITICAL RULE: You MUST call the set_outcome tool BEFORE you say goodbye or end the call. This is mandatory. Never end a call without first calling set_outcome.`;
 
   return {
     model: {
@@ -64,6 +64,32 @@ At the end of the call, you MUST call the function "set_outcome" with the approp
           content: systemPrompt,
         },
       ],
+      // Modern Vapi tools format (replaces legacy 'functions')
+      tools: [
+        {
+          type: "function",
+          function: {
+            name: "set_outcome",
+            description:
+              "MANDATORY: Call this function to record the verification outcome BEFORE ending the call. You must call this every single time before saying goodbye.",
+            parameters: {
+              type: "object",
+              properties: {
+                outcome: {
+                  type: "string",
+                  enum: ["P1_SUCCESS", "P2_VOICEMAIL", "P3_UNREACHABLE", "P4_UNCLEAR"],
+                  description:
+                    "P1_SUCCESS=confirmed identity, P2_VOICEMAIL=voicemail matched, P3_UNREACHABLE=no connection, P4_UNCLEAR=refused/unclear",
+                },
+              },
+              required: ["outcome"],
+            },
+          },
+        },
+        {
+          type: "endCall",
+        },
+      ],
     },
     voice: {
       provider: "vapi",
@@ -71,24 +97,6 @@ At the end of the call, you MUST call the function "set_outcome" with the approp
     },
     firstMessage: `Hi, is this ${name}?`,
     endCallFunctionEnabled: true,
-    functions: [
-      {
-        name: "set_outcome",
-        description:
-          "Call this function at the end of the conversation to record the outcome of the verification attempt.",
-        parameters: {
-          type: "object",
-          properties: {
-            outcome: {
-              type: "string",
-              enum: ["P1_SUCCESS", "P2_VOICEMAIL", "P3_UNREACHABLE", "P4_UNCLEAR"],
-              description: "The outcome of the verification attempt",
-            },
-          },
-          required: ["outcome"],
-        },
-      },
-    ],
     // Vapi will POST events to this URL
     serverUrl: `${process.env.WEBHOOK_BASE_URL}/api/webhook`,
   };

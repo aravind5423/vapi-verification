@@ -71,24 +71,36 @@ export default async function handler(req, res) {
     return res.status(200).json({ received: true });
   }
 
-  // ── function-call: set_outcome ────────────────────────────────────────────
-  if (eventType === "function-call") {
-    const functionCall =
-      message?.functionCall ?? message?.function_call ?? message?.toolCall ?? null;
+  // ── tool-calls (modern Vapi) OR function-call (legacy) ───────────────────
+  if (eventType === "function-call" || eventType === "tool-calls") {
+    let functionName = null;
+    let parsedParams = {};
 
-    const functionName = functionCall?.name ?? functionCall?.function?.name ?? null;
-    const parameters =
-      functionCall?.parameters ?? functionCall?.arguments ?? {};
-
-    // Parse stringified JSON if Vapi sends arguments as a string
-    let parsedParams = parameters;
-    if (typeof parameters === "string") {
-      try {
-        parsedParams = JSON.parse(parameters);
-      } catch {
-        parsedParams = {};
+    if (eventType === "function-call") {
+      // Legacy shape: message.functionCall.name / .parameters
+      const functionCall =
+        message?.functionCall ?? message?.function_call ?? message?.toolCall ?? null;
+      functionName = functionCall?.name ?? functionCall?.function?.name ?? null;
+      let parameters = functionCall?.parameters ?? functionCall?.arguments ?? {};
+      if (typeof parameters === "string") {
+        try { parsedParams = JSON.parse(parameters); } catch { parsedParams = {}; }
+      } else {
+        parsedParams = parameters;
+      }
+    } else {
+      // Modern shape: message.toolCallList[0].function.name / .arguments
+      const toolCallList = message?.toolCallList ?? [];
+      const firstTool = toolCallList[0] ?? null;
+      functionName = firstTool?.function?.name ?? firstTool?.name ?? null;
+      let args = firstTool?.function?.arguments ?? firstTool?.arguments ?? firstTool?.parameters ?? {};
+      if (typeof args === "string") {
+        try { parsedParams = JSON.parse(args); } catch { parsedParams = {}; }
+      } else {
+        parsedParams = args;
       }
     }
+
+    console.log(`[webhook] tool/function call → name=${functionName} params=${JSON.stringify(parsedParams)} call_id=${callId}`);
 
     if (functionName === "set_outcome") {
       const outcome = parsedParams?.outcome ?? "P4_UNCLEAR";
@@ -100,7 +112,7 @@ export default async function handler(req, res) {
         await patch(callId, { outcome, result });
       }
 
-      // Vapi REQUIRES a 200 with { result } to acknowledge function calls
+      // Vapi REQUIRES a 200 with { result } to acknowledge tool/function calls
       return res.status(200).json({ result: outcome });
     }
 
