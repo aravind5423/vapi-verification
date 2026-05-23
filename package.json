@@ -1,0 +1,19 @@
+{
+  "name": "vapi-verification",
+  "version": "1.0.0",
+  "description": "Vapi AI outbound phone verification webhook — deployable on Vercel",
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "dev": "vercel dev",
+    "deploy": "vercel --prod"
+  },
+  "devDependencies": {
+    "vercel": "^33.0.0"
+  },
+  "dependencies": {
+    "@upstash/redis": "^1.38.0"
+  }
+}

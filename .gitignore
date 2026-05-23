@@ -1,0 +1,19 @@
+# Dependencies
+node_modules/
+
+# Environment secrets — NEVER commit these
+.env.local
+.env
+.env.*.local
+
+# Vercel
+.vercel
+
+# OS artifacts
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+ngrok_out.txt
+ngrok_err.txt
