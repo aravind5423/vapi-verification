@@ -52,7 +52,7 @@ OUTCOME CODES:
 - P3_UNREACHABLE → could not connect
 - P4_UNCLEAR → connected but identity unconfirmed / hostile / refused
 
-At the end of the call, you MUST call the function "set_outcome" with the appropriate outcome code.`;
+At the end of the call, you MUST call the function "set_outcome" with the appropriate outcome code BEFORE saying goodbye or ending the call. Never hang up without calling this function first!`;
 
   return {
     model: {

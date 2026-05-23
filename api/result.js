@@ -43,10 +43,14 @@ export default async function handler(req, res) {
         const vapiCall = await vapiRes.json();
         if (vapiCall.status === "ended") {
           console.log(`[result] Vapi shows call ${call_id} ended (${vapiCall.endedReason}), but webhook was missed. Forcing completion.`);
+          
+          const reason = vapiCall.endedReason || "";
+          const isErrorOrTimeout = reason.includes("error") || reason.includes("timeout") || reason.includes("failed");
+          
           data.completed = true;
-          data.outcome = "P3_UNREACHABLE"; // Fallback for dropped/unanswered calls
+          data.outcome = isErrorOrTimeout ? "P3_UNREACHABLE" : "P4_UNCLEAR"; 
           data.finalResult = "fail";
-          data.failReason = vapiCall.endedReason || "silent_drop";
+          data.failReason = reason || "silent_drop";
           
           await set(call_id, data);
           

@@ -108,25 +108,34 @@ export default async function handler(req, res) {
     return res.status(200).json({ result: "unhandled_function" });
   }
 
-  // ── call-ended ────────────────────────────────────────────────────────────
-  if (eventType === "call-ended") {
+  // ── call-ended / status-update / end-of-call-report ──────────────────────
+  const isCallEndedEvent = 
+    eventType === "call-ended" || 
+    eventType === "end-of-call-report" || 
+    (eventType === "status-update" && message?.status === "ended");
+
+  if (isCallEndedEvent) {
     if (callId) {
       const stored = (await get(callId)) ?? {};
-      const finalResult = stored?.result ?? "fail";
-      const outcome = stored?.outcome ?? "P4_UNCLEAR";
+      
+      // If already completed by another event, just ack
+      if (!stored.completed) {
+        const finalResult = stored?.result ?? "fail";
+        const outcome = stored?.outcome ?? "P4_UNCLEAR";
 
-      await set(callId, {
-        ...stored,
-        status: "completed",
-        outcome,
-        finalResult,
-        completed: true,
-        completedAt: new Date().toISOString(),
-      });
+        await set(callId, {
+          ...stored,
+          status: "completed",
+          outcome,
+          finalResult,
+          completed: true,
+          completedAt: new Date().toISOString(),
+        });
 
-      console.log(
-        `[webhook] call-ended → call_id=${callId} outcome=${outcome} finalResult=${finalResult}`
-      );
+        console.log(
+          `[webhook] call ended event (${eventType}) → call_id=${callId} outcome=${outcome} finalResult=${finalResult}`
+        );
+      }
     }
     return res.status(200).json({ received: true });
   }
