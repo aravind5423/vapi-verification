@@ -66,8 +66,8 @@ At the end of the call, you MUST call the function "set_outcome" with the approp
       ],
     },
     voice: {
-      provider: "11labs",
-      voiceId: "rachel",
+      provider: "vapi",
+      voiceId: "Elliot",
     },
     firstMessage: `Hi, is this ${name}?`,
     endCallFunctionEnabled: true,
