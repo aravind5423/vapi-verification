@@ -12,7 +12,7 @@
  * ---------------------------------------------------------------------------
  */
 
-import { get } from "../lib/outcomeStore.js";
+import { get, set } from "../lib/outcomeStore.js";
 
 export default async function handler(req, res) {
   // Only accept GET
@@ -33,6 +33,38 @@ export default async function handler(req, res) {
   }
 
   if (!data.completed) {
+    try {
+      // Sync with Vapi to catch silent failures (e.g. SIP timeouts) where Vapi
+      // marks the call as 'ended' but fails to send the webhook.
+      const vapiRes = await fetch(`https://api.vapi.ai/call/${call_id}`, {
+        headers: { Authorization: `Bearer ${process.env.VAPI_API_KEY}` }
+      });
+      if (vapiRes.ok) {
+        const vapiCall = await vapiRes.json();
+        if (vapiCall.status === "ended") {
+          console.log(`[result] Vapi shows call ${call_id} ended (${vapiCall.endedReason}), but webhook was missed. Forcing completion.`);
+          data.completed = true;
+          data.outcome = "P3_UNREACHABLE"; // Fallback for dropped/unanswered calls
+          data.finalResult = "fail";
+          data.failReason = vapiCall.endedReason || "silent_drop";
+          
+          await set(call_id, data);
+          
+          return res.status(200).json({
+            status: "completed",
+            call_id,
+            result: data.finalResult,
+            outcome: data.outcome,
+            name: data.name,
+            phone_number: data.phone_number,
+            failReason: data.failReason
+          });
+        }
+      }
+    } catch (e) {
+      console.error("[result] Vapi sync check failed", e);
+    }
+
     return res.status(200).json({
       status: "pending",
       call_id,
