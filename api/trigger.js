@@ -101,7 +101,7 @@ export default async function handler(req, res) {
     return res.status(405).json({ success: false, error: "Method not allowed" });
   }
 
-  const { name, phone_number } = req.body ?? {};
+  let { name, phone_number } = req.body ?? {};
 
   // ── Validate input ──────────────────────────────────────────────────────
   const missing = [];
@@ -114,6 +114,9 @@ export default async function handler(req, res) {
       error: `Missing required fields: ${missing.join(", ")}`,
     });
   }
+
+  // Clean the phone number (remove spaces, dashes, parentheses)
+  phone_number = phone_number.replace(/[\s\-\(\)]/g, "");
 
   // Basic E.164 sanity check
   if (!/^\+\d{7,15}$/.test(phone_number)) {
