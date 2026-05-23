@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Phone Verification</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #0a0a0f;
+      --surface: rgba(255, 255, 255, 0.03);
+      --surface-border: rgba(255, 255, 255, 0.08);
+      --primary: #6366f1;
+      --primary-hover: #4f46e5;
+      --text: #ffffff;
+      --text-muted: #9ca3af;
+      --success: #10b981;
+      --error: #ef4444;
+      --warning: #f59e0b;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: 'Inter', sans-serif;
+      background-color: var(--bg);
+      color: var(--text);
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      overflow: hidden;
+      position: relative;
+    }
+
+    /* Background effects */
+    .blob {
+      position: absolute;
+      width: 600px;
+      height: 600px;
+      background: radial-gradient(circle, rgba(99,102,241,0.15) 0%, rgba(0,0,0,0) 70%);
+      border-radius: 50%;
+      top: -200px;
+      left: -200px;
+      z-index: 0;
+      pointer-events: none;
+    }
+    
+    .blob2 {
+      position: absolute;
+      width: 500px;
+      height: 500px;
+      background: radial-gradient(circle, rgba(16,185,129,0.1) 0%, rgba(0,0,0,0) 70%);
+      border-radius: 50%;
+      bottom: -150px;
+      right: -100px;
+      z-index: 0;
+      pointer-events: none;
+    }
+
+    .container {
+      position: relative;
+      z-index: 1;
+      width: 100%;
+      max-width: 420px;
+      padding: 40px;
+      background: var(--surface);
+      border: 1px solid var(--surface-border);
+      border-radius: 24px;
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+      animation: slideUp 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    @keyframes slideUp {
+      from { opacity: 0; transform: translateY(20px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .header {
+      text-align: center;
+      margin-bottom: 32px;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 4px 12px;
+      background: rgba(99, 102, 241, 0.1);
+      color: #818cf8;
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: 600;
+      margin-bottom: 16px;
+      letter-spacing: 0.5px;
+      border: 1px solid rgba(99, 102, 241, 0.2);
+    }
+
+    h1 {
+      font-size: 24px;
+      font-weight: 600;
+      margin-bottom: 8px;
+      letter-spacing: -0.5px;
+    }
+
+    p.subtitle {
+      color: var(--text-muted);
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    .form-group {
+      margin-bottom: 20px;
+    }
+
+    label {
+      display: block;
+      font-size: 13px;
+      font-weight: 500;
+      margin-bottom: 8px;
+      color: var(--text-muted);
+    }
+
+    input {
+      width: 100%;
+      padding: 14px 16px;
+      background: rgba(0, 0, 0, 0.2);
+      border: 1px solid var(--surface-border);
+      border-radius: 12px;
+      color: white;
+      font-size: 15px;
+      font-family: inherit;
+      transition: all 0.2s ease;
+      outline: none;
+    }
+
+    input:focus {
+      border-color: var(--primary);
+      box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15);
+      background: rgba(0, 0, 0, 0.3);
+    }
+
+    input::placeholder {
+      color: rgba(255, 255, 255, 0.2);
+    }
+
+    button {
+      width: 100%;
+      padding: 16px;
+      background: var(--primary);
+      color: white;
+      border: none;
+      border-radius: 12px;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      font-family: inherit;
+      margin-top: 8px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    button:hover {
+      background: var(--primary-hover);
+      transform: translateY(-1px);
+      box-shadow: 0 10px 20px -10px rgba(99, 102, 241, 0.5);
+    }
+
+    button:active {
+      transform: translateY(1px);
+    }
+
+    button:disabled {
+      opacity: 0.7;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    .loader {
+      display: none;
+      width: 20px;
+      height: 20px;
+      border: 2px solid rgba(255,255,255,0.3);
+      border-radius: 50%;
+      border-top-color: white;
+      animation: spin 0.8s linear infinite;
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      margin-top: -10px;
+      margin-left: -10px;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    /* Status UI */
+    .status-card {
+      display: none;
+      margin-top: 24px;
+      padding: 20px;
+      border-radius: 16px;
+      background: rgba(0,0,0,0.2);
+      border: 1px solid var(--surface-border);
+      animation: fadeIn 0.4s ease;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: scale(0.95); }
+      to { opacity: 1; transform: scale(1); }
+    }
+
+    .status-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 8px;
+    }
+
+    .status-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--text-muted);
+    }
+    
+    .status-dot.pulse {
+      background: var(--warning);
+      box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.4);
+      animation: pulseWarning 1.5s infinite cubic-bezier(0.66, 0, 0, 1);
+    }
+
+    @keyframes pulseWarning {
+      to { box-shadow: 0 0 0 10px rgba(245, 158, 11, 0); }
+    }
+
+    .status-dot.success { background: var(--success); }
+    .status-dot.error { background: var(--error); }
+
+    .status-title {
+      font-weight: 600;
+      font-size: 15px;
+    }
+
+    .status-message {
+      font-size: 13px;
+      color: var(--text-muted);
+      margin-left: 22px;
+    }
+
+    .log-box {
+      margin-top: 16px;
+      padding: 12px;
+      background: rgba(0,0,0,0.4);
+      border-radius: 8px;
+      font-family: monospace;
+      font-size: 12px;
+      color: var(--text-muted);
+      white-space: pre-wrap;
+      max-height: 100px;
+      overflow-y: auto;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="blob"></div>
+  <div class="blob2"></div>
+
+  <div class="container">
+    <div class="header">
+      <div class="badge">LIVE DEMO</div>
+      <h1>AI Verification</h1>
+      <p class="subtitle">Enter your details to receive an AI-powered verification phone call.</p>
+    </div>
+
+    <form id="verifyForm">
+      <div class="form-group">
+        <label for="name">Full Name</label>
+        <input type="text" id="name" placeholder="e.g. John Doe" required autocomplete="name">
+      </div>
+      
+      <div class="form-group">
+        <label for="phone">Phone Number</label>
+        <input type="tel" id="phone" placeholder="e.g. +16818801165" required>
+      </div>
+
+      <button type="submit" id="submitBtn">
+        <span id="btnText">Verify Me Now</span>
+        <div class="loader" id="btnLoader"></div>
+      </button>
+    </form>
+
+    <div class="status-card" id="statusCard">
+      <div class="status-header">
+        <div class="status-dot pulse" id="statusDot"></div>
+        <div class="status-title" id="statusTitle">Connecting...</div>
+      </div>
+      <div class="status-message" id="statusMessage">Initiating call to your phone</div>
+      <div class="log-box" id="logBox"></div>
+    </div>
+  </div>
+
+  <script>
+    const form = document.getElementById('verifyForm');
+    const submitBtn = document.getElementById('submitBtn');
+    const btnText = document.getElementById('btnText');
+    const btnLoader = document.getElementById('btnLoader');
+    const statusCard = document.getElementById('statusCard');
+    const statusDot = document.getElementById('statusDot');
+    const statusTitle = document.getElementById('statusTitle');
+    const statusMessage = document.getElementById('statusMessage');
+    const logBox = document.getElementById('logBox');
+
+    let pollInterval = null;
+
+    function log(msg) {
+      const time = new Date().toLocaleTimeString();
+      logBox.textContent += `[${time}] ${msg}\n`;
+      logBox.scrollTop = logBox.scrollHeight;
+    }
+
+    function setStatus(state, title, message) {
+      statusDot.className = 'status-dot';
+      if (state === 'pending') statusDot.classList.add('pulse');
+      if (state === 'success') statusDot.classList.add('success');
+      if (state === 'error') statusDot.classList.add('error');
+      
+      statusTitle.textContent = title;
+      statusMessage.textContent = message;
+    }
+
+    async function pollResult(callId) {
+      try {
+        const res = await fetch(`/api/result?call_id=${callId}`);
+        const data = await res.json();
+        
+        log(`Status: ${data.status} | Result: ${data.result || 'none'}`);
+
+        if (data.status === 'completed') {
+          clearInterval(pollInterval);
+          submitBtn.disabled = false;
+          btnText.style.opacity = 1;
+          btnLoader.style.display = 'none';
+
+          if (data.result === 'success') {
+            setStatus('success', 'Verification Successful!', 'Identity confirmed successfully.');
+            log(`Outcome: ${data.outcome} - Passed!`);
+          } else {
+            setStatus('error', 'Verification Failed', 'Identity could not be confirmed.');
+            log(`Outcome: ${data.outcome} - Failed!`);
+          }
+        }
+      } catch (err) {
+        log(`Poll error: ${err.message}`);
+      }
+    }
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      
+      const name = document.getElementById('name').value;
+      const phone = document.getElementById('phone').value;
+
+      // UI Reset
+      submitBtn.disabled = true;
+      btnText.style.opacity = 0;
+      btnLoader.style.display = 'block';
+      statusCard.style.display = 'block';
+      logBox.textContent = '';
+      if(pollInterval) clearInterval(pollInterval);
+      
+      setStatus('pending', 'Calling...', 'Please answer your phone.');
+      log(`Triggering call to ${phone} for ${name}...`);
+
+      try {
+        const res = await fetch('/api/trigger', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, phone_number: phone })
+        });
+        
+        const data = await res.json();
+        
+        if (!data.success) {
+          throw new Error(data.error || 'Failed to trigger call');
+        }
+
+        log(`Call fired! ID: ${data.call_id}`);
+        log('Waiting for outcome...');
+        
+        // Start polling
+        pollInterval = setInterval(() => pollResult(data.call_id), 3000);
+
+      } catch (err) {
+        setStatus('error', 'Error', err.message);
+        log(`Error: ${err.message}`);
+        submitBtn.disabled = false;
+        btnText.style.opacity = 1;
+        btnLoader.style.display = 'none';
+      }
+    });
+  </script>
+</body>
+</html>
