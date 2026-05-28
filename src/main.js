@@ -63,6 +63,17 @@ function parseArgs(raw) {
   return raw;
 }
 
+function describeError(e) {
+  if (!e) return "Unknown error";
+  if (typeof e === "string") return e;
+  const m =
+    e?.error?.message || e?.errorMsg || e?.message ||
+    e?.error?.msg || e?.error?.error || e?.reason || e?.type;
+  if (m) return typeof m === "string" ? m : safeJson(m);
+  return safeJson(e);
+}
+function safeJson(v) { try { return JSON.stringify(v); } catch { return String(v); } }
+
 function setStatus(icon, orbClass, title, msg, cardState) {
   orbEmoji.textContent = icon;
   orb.className = `orb ${orbClass}`;
@@ -169,16 +180,18 @@ if (vapi) {
 
   vapi.on("error", (e) => {
     console.error("[vapi] error", e);
-    const raw = (e?.error?.message || e?.message || JSON.stringify(e) || "").toString();
-    let msg = "Something went wrong with the call. Please try again.";
-    if (raw.includes("NotAllowedError") || raw.toLowerCase().includes("permission")) {
-      msg = "Microphone access is required. Please allow your mic and try again.";
-    } else if (raw.toLowerCase().includes("notfound")) {
+    const detail = describeError(e);
+    const low = detail.toLowerCase();
+    let msg = detail;
+    if (low.includes("notallowed") || low.includes("permission")) {
+      msg = "Microphone access is required — allow your mic and try again.";
+    } else if (low.includes("notfound")) {
       msg = "No microphone found. Plug one in and try again.";
     }
     inCall = false;
     callControls.className = "call-controls";
-    setStatus("⚠️", "error", "Error", msg, "error");
+    setStatus("⚠️", "error", "Call Error", msg, "error");
+    if (window.__showBootError) window.__showBootError("⚠️ Call error: " + detail);
     retryBtn.className = "retry-btn show";
     showStartButtonLoading(false);
   });
@@ -219,8 +232,9 @@ startBtn.addEventListener("click", async () => {
     await vapi.start(ASSISTANT_ID, { variableValues: { name } });
   } catch (err) {
     console.error("[vapi] start failed", err);
-    setStatus("⚠️", "error", "Couldn't Start",
-      "We couldn't start the call. Check your mic permission and try again.", "error");
+    const detail = describeError(err);
+    setStatus("⚠️", "error", "Couldn't Start", detail, "error");
+    if (window.__showBootError) window.__showBootError("⚠️ Start failed: " + detail);
     retryBtn.className = "retry-btn show";
     showStartButtonLoading(false);
   }

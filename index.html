@@ -7,6 +7,11 @@
   <meta name="description" content="AI-powered identity verification — a quick voice call, right in your browser." />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <script>
+    // Polyfill Node globals that the Vapi SDK's Daily.co engine expects in the browser.
+    window.global = window.global || window;
+    window.process = window.process || { env: {}, browser: true, version: "", nextTick: function (cb) { setTimeout(cb, 0); } };
+  </script>
+  <script>
     // Surface any load/runtime error on the page instead of failing silently.
     window.__showBootError = function (msg) {
       var el = document.getElementById("bootError");
