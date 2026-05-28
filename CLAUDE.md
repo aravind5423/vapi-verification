@@ -1,0 +1,66 @@
+# CLAUDE.md
+
+Guidance for working in this repo.
+
+## What this is
+A **browser-based AI voice verification** app. A visitor enters their name, clicks Start, and has a live voice conversation with an AI agent ("Freya") **in the browser** via the Vapi Web SDK (`@vapi-ai/web`). Freya runs a short "pulse check" survey and records an outcome (`P1`–`P4`) that the page shows in real time. No phone calls, no Twilio — the call is WebRTC mic/speakers.
+
+## Architecture (read this first)
+- **Pure static SPA built with Vite.** There is **no backend / no `api/` functions / no database.** (The old phone-calling serverless backend was removed — see git history if curious.)
+- **The agent lives in the Vapi dashboard, not in this code.** The frontend only starts a dashboard assistant *by ID*. The system prompt, voice, tools, and `set_outcome` function are all configured on the Vapi assistant.
+  - To change agent behavior (prompt/voice/tools): edit the dashboard assistant, or re-run `scripts/configure-assistant.mjs`. **Do not look for the prompt in the frontend** — it isn't there.
+- **Outcome capture is client-side.** The dashboard assistant calls an **async** `set_outcome` tool; with the assistant's **clientMessages including `tool-calls`**, that arrives in the browser via `vapi.on('message')` and is read in `src/main.js`.
+
+```
+Browser SPA  ──>  new Vapi(VITE_VAPI_PUBLIC_KEY)
+             ──>  vapi.start(VITE_VAPI_ASSISTANT_ID, { variableValues: { name } })
+             ──>  vapi.on('message')  → set_outcome → P1–P4 result card
+             ──>  vapi.on('volume-level' / 'call-end' / 'error') → UI
+```
+
+## Commands
+```bash
+npm install           # install deps (@vapi-ai/web, vite)
+npm run dev           # Vite dev server → http://localhost:5173
+npm run build         # production build → dist/
+npm run preview       # preview the production build
+
+# (Re)configure the dashboard assistant via the Vapi API — run with your PRIVATE key:
+#   PowerShell: $env:VAPI_PRIVATE_KEY="..."; $env:VAPI_ASSISTANT_ID="..."; node scripts/configure-assistant.mjs
+node scripts/configure-assistant.mjs
+```
+
+## Environment variables
+Both are **browser-safe** (public) and inlined by Vite **at build time** — set in `.env.local` for dev and in Vercel for prod, then rebuild/redeploy to change.
+
+| Var | What |
+|---|---|
+| `VITE_VAPI_PUBLIC_KEY` | Vapi **public** key (not the private key) |
+| `VITE_VAPI_ASSISTANT_ID` | The dashboard assistant's ID |
+
+The **private** key is used only by `scripts/configure-assistant.mjs` (never bundled, never committed).
+
+## Outcome model
+| Code | Meaning | UI |
+|---|---|---|
+| `P1_SUCCESS` | Confirmed the right person | ✅ success |
+| `P2_VOICEMAIL` | Voicemail / machine | 📬 voicemail |
+| `P3_UNREACHABLE` | Couldn't connect | 📵 fail |
+| `P4_UNCLEAR` | Reached someone but couldn't confirm / refused | ❓ fail |
+
+## File map
+- `index.html` — Vite entry; markup for the form, voice orb, transcript, controls, result card.
+- `src/main.js` — all SDK logic: start by assistant ID, capture `set_outcome` from messages, volume-reactive orb, mute/end, mic & error handling. Passes the caller's **first name** as `{{name}}`.
+- `src/style.css` — styles.
+- `scripts/configure-assistant.mjs` — one-shot Vapi API setup of the assistant (prompt, `set_outcome` async tool, `clientMessages: tool-calls`, voice, endCallPhrases). The source of truth for the agent config in code form.
+- `vite.config.js`, `.env.example`.
+
+## Deploy (Vercel)
+Vercel auto-detects Vite (`vite build` → `dist/`). Set the Framework Preset to **Vite** if it's "Other". Add `VITE_VAPI_PUBLIC_KEY` and `VITE_VAPI_ASSISTANT_ID` as Production env vars and redeploy.
+
+## Gotchas
+- **Mic needs a secure context** — works on `localhost` and HTTPS (Vercel), not plain HTTP.
+- **`clientMessages` must include `tool-calls`** on the assistant, or the browser never receives the outcome (it'd default to `P4`).
+- **`set_outcome` is async** (fire-and-forget) so the model doesn't block waiting for a server response that doesn't exist in this client-only setup.
+- The **public key allows anyone on the page to start (paid) calls** — restrict allowed origins to your domain in the Vapi dashboard for production.
+- A real end-to-end test needs a **mic + a human** — the voice call can't be driven headlessly; verify in a browser.

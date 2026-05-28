@@ -14,7 +14,8 @@ const startBtnText= document.getElementById("startBtnText");
 const spinner     = document.getElementById("spinner");
 
 const statusCard  = document.getElementById("statusCard");
-const statusIcon  = document.getElementById("statusIcon");
+const orb         = document.getElementById("orb");
+const orbEmoji    = document.getElementById("orbEmoji");
 const statusTitle = document.getElementById("statusTitle");
 const statusMsg   = document.getElementById("statusMessage");
 const outcomeBadge= document.getElementById("outcomeBadge");
@@ -46,9 +47,10 @@ function parseArgs(raw) {
   return raw;
 }
 
-function setStatus(icon, iconClass, title, msg, cardState) {
-  statusIcon.textContent = icon;
-  statusIcon.className    = `status-icon ${iconClass}`;
+function setStatus(icon, orbClass, title, msg, cardState) {
+  orbEmoji.textContent = icon;
+  orb.className = `orb ${orbClass}`;
+  orb.style.boxShadow = ""; // clear any volume-driven glow from a prior call
   statusTitle.textContent = title;
   statusMsg.textContent   = msg;
   statusCard.className     = `status-card ${cardState ? "state-" + cardState : ""}`;
@@ -117,6 +119,13 @@ if (vapi) {
 
   vapi.on("call-end", () => {
     renderResult(outcome);
+  });
+
+  // Make the orb pulse with Freya's voice while she speaks.
+  vapi.on("volume-level", (v) => {
+    if (!inCall) return;
+    const lvl = Math.max(0, Math.min(1, Number(v) || 0));
+    orb.style.boxShadow = `0 0 ${16 + lvl * 46}px ${4 + lvl * 12}px rgba(99,102,241,${0.18 + lvl * 0.5})`;
   });
 
   vapi.on("message", (m) => {
