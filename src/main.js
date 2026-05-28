@@ -198,7 +198,10 @@ if (vapi) {
 }
 
 // ─── Form / control handlers ─────────────────────────────────────────────────
-startBtn.addEventListener("click", async () => {
+// `submit` (not button `click`) so pressing Enter in the name field starts the
+// call instead of triggering the browser's default form submit (a page reload).
+startForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
   if (!vapi || !PUBLIC_KEY || !ASSISTANT_ID) {
     statusCard.style.display = "block";
     setStatus("⚠️", "error", "Not Configured",
