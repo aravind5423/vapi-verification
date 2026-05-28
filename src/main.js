@@ -1,5 +1,18 @@
-import Vapi from "@vapi-ai/web";
+import * as VapiSDK from "@vapi-ai/web";
 import "./style.css";
+
+// @vapi-ai/web ships as CommonJS (module.exports = { default: VapiClass }).
+// The default-import interop mis-resolves in the production bundle
+// ("X.default is not a constructor"), so resolve the constructor defensively.
+const Vapi =
+  typeof VapiSDK === "function" ? VapiSDK :
+  typeof VapiSDK?.default === "function" ? VapiSDK.default :
+  typeof VapiSDK?.default?.default === "function" ? VapiSDK.default.default :
+  null;
+
+if (!Vapi && typeof window !== "undefined" && window.__showBootError) {
+  window.__showBootError("⚠️ Vapi SDK failed to load (constructor not found).");
+}
 
 // ─── Config (browser-safe, inlined by Vite at build time) ───────────────────
 // Env vars win when set; the fallbacks let it deploy with zero config. Both are
@@ -37,7 +50,7 @@ const OUTCOME_CONFIG = {
 };
 
 // ─── State ───────────────────────────────────────────────────────────────────
-const vapi = PUBLIC_KEY ? new Vapi(PUBLIC_KEY) : null;
+const vapi = (PUBLIC_KEY && Vapi) ? new Vapi(PUBLIC_KEY) : null;
 let outcome = null;     // last set_outcome captured this call
 let inCall  = false;
 
