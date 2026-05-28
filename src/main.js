@@ -170,14 +170,17 @@ startForm.addEventListener("submit", async (e) => {
     return;
   }
 
-  const name = nameInput.value.trim();
-  if (!name) {
+  const fullName = nameInput.value.trim();
+  if (!fullName) {
     nameError.style.display = "block";
     nameInput.classList.add("error-input");
     return;
   }
   nameError.style.display = "none";
   nameInput.classList.remove("error-input");
+
+  // Address by first name only — sounds far more natural than the full name.
+  const name = fullName.split(/\s+/)[0] || fullName;
 
   // Reset card to a fresh connecting state
   outcome = null;
