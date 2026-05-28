@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI Voice Verification</title>
+  <meta name="description" content="AI-powered identity verification — a quick voice call, right in your browser." />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+</head>
+<body>
+  <div class="blob"></div>
+  <div class="blob2"></div>
+
+  <div class="container">
+    <div class="header">
+      <div class="badge">Voice AI</div>
+      <h1>AI Verification</h1>
+      <p class="subtitle">Start a quick voice verification — right here in your browser. Make sure your microphone is on.</p>
+    </div>
+
+    <!-- Idle: start form -->
+    <form id="startForm" novalidate>
+      <div class="form-group">
+        <label for="name">Your Name</label>
+        <input type="text" id="name" placeholder="e.g. John Doe" autocomplete="name" />
+        <div class="field-error" id="nameError">Please enter your name.</div>
+      </div>
+
+      <button type="submit" id="startBtn">
+        <div class="btn-inner">
+          <span id="startBtnText">Start verification call</span>
+          <div class="spinner" id="spinner"></div>
+        </div>
+      </button>
+    </form>
+
+    <!-- In-call / result card -->
+    <div class="status-card" id="statusCard">
+      <div class="status-header">
+        <div class="status-icon pending" id="statusIcon">🎙️</div>
+        <div class="status-title" id="statusTitle">Connecting…</div>
+      </div>
+      <div class="status-message" id="statusMessage">Allow microphone access to begin.</div>
+
+      <div class="outcome-badge" id="outcomeBadge"></div>
+
+      <div class="transcript" id="transcript"></div>
+
+      <div class="call-controls" id="callControls">
+        <button class="ctrl-btn" id="muteBtn" type="button">Mute</button>
+        <button class="ctrl-btn danger" id="endBtn" type="button">End call</button>
+      </div>
+
+      <button class="retry-btn" id="retryBtn" type="button">↩ Start a new verification</button>
+    </div>
+  </div>
+
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>

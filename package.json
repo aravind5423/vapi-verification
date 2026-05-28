@@ -1,19 +1,21 @@
 {
   "name": "vapi-verification",
-  "version": "1.0.0",
-  "description": "Vapi AI outbound phone verification webhook — deployable on Vercel",
+  "private": true,
+  "version": "2.0.0",
+  "description": "Browser-based AI voice verification using the Vapi Web SDK and a dashboard-managed assistant.",
   "type": "module",
   "engines": {
     "node": ">=18"
   },
   "scripts": {
-    "dev": "vercel dev",
-    "deploy": "vercel --prod"
-  },
-  "devDependencies": {
-    "vercel": "^33.0.0"
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
   },
   "dependencies": {
-    "@upstash/redis": "^1.38.0"
+    "@vapi-ai/web": "^2.5.2"
+  },
+  "devDependencies": {
+    "vite": "^8.0.14"
   }
 }

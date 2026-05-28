@@ -1,6 +1,9 @@
 # Dependencies
 node_modules/
 
+# Vite build output
+dist/
+
 # Environment secrets — NEVER commit these
 .env.local
 .env
