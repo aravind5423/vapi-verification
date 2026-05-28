@@ -6,12 +6,27 @@
   <title>AI Voice Verification</title>
   <meta name="description" content="AI-powered identity verification — a quick voice call, right in your browser." />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <script>
+    // Surface any load/runtime error on the page instead of failing silently.
+    window.__showBootError = function (msg) {
+      var el = document.getElementById("bootError");
+      if (el) { el.style.display = "block"; el.textContent = String(msg); }
+    };
+    window.addEventListener("error", function (e) {
+      window.__showBootError("⚠️ Load error: " + (e.message || (e.error && e.error.message) || e.type));
+    });
+    window.addEventListener("unhandledrejection", function (e) {
+      var r = e.reason;
+      window.__showBootError("⚠️ " + ((r && r.message) || r || "Unhandled error"));
+    });
+  </script>
 </head>
 <body>
   <div class="blob"></div>
   <div class="blob2"></div>
 
   <div class="container">
+    <div id="bootError" class="boot-error" style="display:none"></div>
     <div class="header">
       <div class="badge">Voice AI</div>
       <h1>AI Verification</h1>
@@ -26,7 +41,7 @@
         <div class="field-error" id="nameError">Please enter your name.</div>
       </div>
 
-      <button type="submit" id="startBtn">
+      <button type="button" id="startBtn">
         <div class="btn-inner">
           <span id="startBtnText">Start verification call</span>
           <div class="spinner" id="spinner"></div>

@@ -2,8 +2,11 @@ import Vapi from "@vapi-ai/web";
 import "./style.css";
 
 // ─── Config (browser-safe, inlined by Vite at build time) ───────────────────
-const PUBLIC_KEY = import.meta.env.VITE_VAPI_PUBLIC_KEY;
-const ASSISTANT_ID = import.meta.env.VITE_VAPI_ASSISTANT_ID;
+// Env vars win when set; the fallbacks let it deploy with zero config. Both are
+// PUBLIC/non-secret (the public key is meant to live in the browser). For prod,
+// restrict the public key to your domain in the Vapi dashboard.
+const PUBLIC_KEY = import.meta.env.VITE_VAPI_PUBLIC_KEY || "1a840109-9d4c-484d-85e6-e4747c1588f4";
+const ASSISTANT_ID = import.meta.env.VITE_VAPI_ASSISTANT_ID || "28fe3455-e09e-4d09-bf74-6c7b0411a804";
 
 // ─── Element refs ────────────────────────────────────────────────────────────
 const startForm   = document.getElementById("startForm");
@@ -169,9 +172,7 @@ if (vapi) {
 }
 
 // ─── Form / control handlers ─────────────────────────────────────────────────
-startForm.addEventListener("submit", async (e) => {
-  e.preventDefault();
-
+startBtn.addEventListener("click", async () => {
   if (!vapi || !PUBLIC_KEY || !ASSISTANT_ID) {
     statusCard.style.display = "block";
     setStatus("⚠️", "error", "Not Configured",

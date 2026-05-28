@@ -63,6 +63,18 @@ body {
   to   { opacity: 1; transform: translateY(0); }
 }
 
+.boot-error {
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: rgba(239,68,68,0.1);
+  border: 1px solid rgba(239,68,68,0.35);
+  color: #fca5a5;
+  font-size: 12px;
+  line-height: 1.5;
+  word-break: break-word;
+}
+
 .header { text-align: center; margin-bottom: 32px; }
 
 .badge {
