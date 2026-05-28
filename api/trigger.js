@@ -127,7 +127,7 @@ SCENARIO F — Number is unreachable / invalid / off:
       model: "sonic-3.5",
       voiceId: "00a77add-48d5-4ef6-8157-71e5437b282d",
       generationConfig: {
-        speed: 0.8,
+        speed: 1.0,
         volume: 1.2,
       },
       experimentalControls: {
