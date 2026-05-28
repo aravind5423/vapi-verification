@@ -121,8 +121,18 @@ SCENARIO F — Number is unreachable / invalid / off:
       ],
     },
     voice: {
-      provider: "vapi",
-      voiceId: "Savannah",
+      // Cartesia "Callie" — a natural female voice (the vapi-native voices were
+      // unreliable; Savannah produced silence on this account).
+      provider: "cartesia",
+      model: "sonic-3.5",
+      voiceId: "00a77add-48d5-4ef6-8157-71e5437b282d",
+      generationConfig: {
+        speed: 0.8,
+        volume: 1.2,
+      },
+      experimentalControls: {
+        emotion: ["curiosity:high", "sadness:low", "positivity:high"],
+      },
     },
     firstMessage: `Hi, um, is this ${firstName}?`,
     endCallFunctionEnabled: true,
