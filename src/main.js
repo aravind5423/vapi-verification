@@ -53,6 +53,7 @@ const OUTCOME_CONFIG = {
 const vapi = (PUBLIC_KEY && Vapi) ? new Vapi(PUBLIC_KEY) : null;
 let outcome = null;     // last set_outcome captured this call
 let inCall  = false;
+let lastTranscriptRole = null;  // for merging consecutive same-speaker segments
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 function parseArgs(raw) {
@@ -85,12 +86,25 @@ function setStatus(icon, orbClass, title, msg, cardState) {
 
 function appendTranscript(role, text) {
   if (!text) return;
-  const who = role === "assistant" ? "Freya" : "You";
-  const line = document.createElement("div");
-  line.className = `line ${role === "assistant" ? "assistant" : "user"}`;
-  line.innerHTML = `<span class="who">${who}:</span> <span class="what"></span>`;
-  line.querySelector(".what").textContent = text;
-  transcript.appendChild(line);
+  const norm = role === "assistant" ? "assistant" : "user";
+  const lastLine = transcript.lastElementChild;
+
+  // The transcriber emits one utterance as several "final" chunks; merge
+  // consecutive segments from the same speaker so they read as one turn
+  // instead of a new prefixed line per fragment.
+  if (lastLine && lastTranscriptRole === norm) {
+    const what = lastLine.querySelector(".what");
+    what.textContent = `${what.textContent} ${text}`.trim();
+  } else {
+    const who = norm === "assistant" ? "Freya" : "You";
+    const line = document.createElement("div");
+    line.className = `line ${norm}`;
+    line.innerHTML = `<span class="who"></span><span class="what"></span>`;
+    line.querySelector(".who").textContent = who;
+    line.querySelector(".what").textContent = text;
+    transcript.appendChild(line);
+    lastTranscriptRole = norm;
+  }
   transcript.classList.add("show");
   transcript.scrollTop = transcript.scrollHeight;
 }
@@ -104,6 +118,8 @@ function showStartButtonLoading(loading) {
 function resetToIdle() {
   outcome = null;
   inCall = false;
+  lastTranscriptRole = null;
+  window.__clearBootError?.();
   showStartButtonLoading(false);
   statusCard.style.display = "none";
   outcomeBadge.className = "outcome-badge";
@@ -124,8 +140,10 @@ function renderResult(code) {
   showStartButtonLoading(false);
 
   if (!code) {
-    // Call ended without a recorded outcome (e.g. hung up early) — stay neutral.
-    setStatus("☎️", "error", "Call Ended", "The call ended before a result was recorded.", "error");
+    // Call ended without a recorded outcome (e.g. hung up early, or the agent
+    // never heard you and timed out on silence) — stay neutral and nudge the mic.
+    setStatus("☎️", "error", "Call Ended",
+      "The call ended before a result was recorded. If you didn't get to speak, check that your microphone is working and try again.", "error");
   } else {
     const cfg = OUTCOME_CONFIG[code] || OUTCOME_CONFIG.P4_UNCLEAR;
     setStatus(cfg.icon, cfg.cardState, cfg.title, cfg.msg, cfg.cardState);
@@ -182,6 +200,16 @@ if (vapi) {
     console.error("[vapi] error", e);
     const detail = describeError(e);
     const low = detail.toLowerCase();
+
+    // Daily tears the room down when the call ends (silence timeout, normal
+    // hangup, etc.) and surfaces it here as an "error" — but it isn't one.
+    // Don't alarm the user; let the call-end handler render the result.
+    if (low.includes("meeting has ended") || low.includes("meeting ended") || low.includes("ejected")) {
+      inCall = false;
+      callControls.className = "call-controls";
+      return;
+    }
+
     let msg = detail;
     if (low.includes("notallowed") || low.includes("permission")) {
       msg = "Microphone access is required — allow your mic and try again.";
@@ -191,7 +219,6 @@ if (vapi) {
     inCall = false;
     callControls.className = "call-controls";
     setStatus("⚠️", "error", "Call Error", msg, "error");
-    if (window.__showBootError) window.__showBootError("⚠️ Call error: " + detail);
     retryBtn.className = "retry-btn show";
     showStartButtonLoading(false);
   });
@@ -223,6 +250,8 @@ startForm.addEventListener("submit", async (e) => {
 
   // Reset card to a fresh connecting state
   outcome = null;
+  lastTranscriptRole = null;
+  window.__clearBootError?.();
   transcript.className = "transcript";
   transcript.innerHTML = "";
   outcomeBadge.className = "outcome-badge";

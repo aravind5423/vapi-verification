@@ -17,6 +17,10 @@
       var el = document.getElementById("bootError");
       if (el) { el.style.display = "block"; el.textContent = String(msg); }
     };
+    window.__clearBootError = function () {
+      var el = document.getElementById("bootError");
+      if (el) { el.style.display = "none"; el.textContent = ""; }
+    };
     window.addEventListener("error", function (e) {
       window.__showBootError("⚠️ Load error: " + (e.message || (e.error && e.error.message) || e.type));
     });
