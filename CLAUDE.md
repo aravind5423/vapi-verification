@@ -31,7 +31,7 @@ node scripts/configure-assistant.mjs
 ```
 
 ## Environment variables
-Both are **browser-safe** (public) and inlined by Vite **at build time** — set in `.env.local` for dev and in Vercel for prod, then rebuild/redeploy to change.
+Both are **browser-safe** (public) and inlined by Vite **at build time**. They're **optional** — `src/main.js` has hardcoded fallbacks so the app deploys with zero config — but env vars override them when set (`.env.local` for dev, Vercel env for prod; rebuild/redeploy to change).
 
 | Var | What |
 |---|---|
@@ -49,18 +49,22 @@ The **private** key is used only by `scripts/configure-assistant.mjs` (never bun
 | `P4_UNCLEAR` | Reached someone but couldn't confirm / refused | ❓ fail |
 
 ## File map
-- `index.html` — Vite entry; markup for the form, voice orb, transcript, controls, result card.
-- `src/main.js` — all SDK logic: start by assistant ID, capture `set_outcome` from messages, volume-reactive orb, mute/end, mic & error handling. Passes the caller's **first name** as `{{name}}`.
+- `index.html` — Vite entry; markup for the form, voice orb, transcript, controls, result card. Also contains a small inline script that **shims `window.global`/`window.process`** (for Daily.co) and an **on-page error banner** (`window.__showBootError`).
+- `src/main.js` — all SDK logic: resolve the Vapi constructor (see gotchas), start by assistant ID, capture `set_outcome` from messages, volume-reactive orb, mute/end, mic & error handling. Passes the caller's **first name** as `{{name}}`.
 - `src/style.css` — styles.
 - `scripts/configure-assistant.mjs` — one-shot Vapi API setup of the assistant (prompt, `set_outcome` async tool, `clientMessages: tool-calls`, voice, endCallPhrases). The source of truth for the agent config in code form.
-- `vite.config.js`, `.env.example`.
+- `vite.config.js` — defines `global: globalThis` for the SDK. `vercel.json` — pins `framework: vite`, build → `dist/`.
+- `.env.example`.
 
 ## Deploy (Vercel)
-Vercel auto-detects Vite (`vite build` → `dist/`). Set the Framework Preset to **Vite** if it's "Other". Add `VITE_VAPI_PUBLIC_KEY` and `VITE_VAPI_ASSISTANT_ID` as Production env vars and redeploy.
+`vercel.json` pins `framework: vite` (`vite build` → `dist/`), so Vercel builds correctly **without** touching the project's Framework Preset. Thanks to the fallbacks in `src/main.js` it deploys with **no env vars**; set `VITE_*` env vars only to override the baked-in values. A push to `main` auto-deploys (Git-connected).
 
 ## Gotchas
-- **Mic needs a secure context** — works on `localhost` and HTTPS (Vercel), not plain HTTP.
+- **`@vapi-ai/web` is CommonJS** (`module.exports = { default: VapiClass }`). A plain `import Vapi from '@vapi-ai/web'` double-unwraps in the production bundle → `"X.default is not a constructor"`. `src/main.js` therefore imports the namespace and walks to the real constructor. **Don't revert to the default import.**
+- **Daily.co (under the SDK) needs Node globals.** `index.html` shims `window.global`/`window.process` and `vite.config.js` defines `global: globalThis`. Without these the call errors when it starts.
 - **`clientMessages` must include `tool-calls`** on the assistant, or the browser never receives the outcome (it'd default to `P4`).
 - **`set_outcome` is async** (fire-and-forget) so the model doesn't block waiting for a server response that doesn't exist in this client-only setup.
-- The **public key allows anyone on the page to start (paid) calls** — restrict allowed origins to your domain in the Vapi dashboard for production.
+- **Mic needs a secure context** — works on `localhost` and HTTPS (Vercel), not plain HTTP. If a user denied the mic, the browser won't re-prompt; they must re-allow it in site settings and reload.
+- **Debugging a failed call (server vs browser):** `POST https://api.vapi.ai/call/web` with the **public** key + `{ assistantId }` should return **201** with a `webCallUrl`. If that works, your key/assistant are fine and the failure is browser-side (mic/WebRTC). The on-page error banner shows the exact runtime error.
+- The **public key lets anyone on the page start (paid) calls** — restrict allowed origins to your domain in the Vapi dashboard for production.
 - A real end-to-end test needs a **mic + a human** — the voice call can't be driven headlessly; verify in a browser.
