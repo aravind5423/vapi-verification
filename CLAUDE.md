@@ -45,8 +45,10 @@ The **private** key is used only by `scripts/configure-assistant.mjs` (never bun
 |---|---|---|
 | `P1_SUCCESS` | Confirmed the right person | ✅ success |
 | `P2_VOICEMAIL` | Voicemail / machine | 📬 voicemail |
-| `P3_UNREACHABLE` | Couldn't connect | 📵 fail |
-| `P4_UNCLEAR` | Reached someone but couldn't confirm / refused | ❓ fail |
+| `P3_UNREACHABLE` | Couldn't connect / dead air | 📵 error |
+| `P4_DECLINED` | Reached the person but they declined / weren't interested / hostile | 🚫 warning |
+| `P5_WRONG_PERSON` | Reached someone, but wrong person / target unavailable | 🙅 neutral |
+| `P6_UNCLEAR` | Reached someone but couldn't determine (garbled / language / ambiguous) | 🤔 muted |
 
 ## File map
 - `index.html` — Vite entry; markup for the form, voice orb, transcript, controls, result card. Also contains a small inline script that **shims `window.global`/`window.process`** (for Daily.co) and an **on-page error banner** (`window.__showBootError`).
@@ -64,6 +66,7 @@ The **private** key is used only by `scripts/configure-assistant.mjs` (never bun
 - **Daily.co (under the SDK) needs Node globals.** `index.html` shims `window.global`/`window.process` and `vite.config.js` defines `global: globalThis`. Without these the call errors when it starts.
 - **`clientMessages` must include `tool-calls`** on the assistant, or the browser never receives the outcome (it'd default to `P4`).
 - **`set_outcome` is async** (fire-and-forget) so the model doesn't block waiting for a server response that doesn't exist in this client-only setup.
+- **Two-mode call ending (don't merge them).** Scenarios with a spoken goodbye end via `endCallPhrases` (the agent says the line, which ends with a phrase like "have a good day", and Vapi hangs up *after* the utterance). The `endCall` **tool** is reserved for silent ends (voicemail/dead-air). Letting the model call the `endCall` tool right after a closing line **cuts off the final TTS** — that was the "voice glitches at the end" bug. The prompt in `configure-assistant.mjs` enforces this; keep it.
 - **Mic needs a secure context** — works on `localhost` and HTTPS (Vercel), not plain HTTP. If a user denied the mic, the browser won't re-prompt; they must re-allow it in site settings and reload.
 - **Debugging a failed call (server vs browser):** `POST https://api.vapi.ai/call/web` with the **public** key + `{ assistantId }` should return **201** with a `webCallUrl`. If that works, your key/assistant are fine and the failure is browser-side (mic/WebRTC). The on-page error banner shows the exact runtime error.
 - The **public key lets anyone on the page start (paid) calls** — restrict allowed origins to your domain in the Vapi dashboard for production.

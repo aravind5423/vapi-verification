@@ -29,24 +29,25 @@ const startBtn    = document.getElementById("startBtn");
 const startBtnText= document.getElementById("startBtnText");
 const spinner     = document.getElementById("spinner");
 
-const statusCard  = document.getElementById("statusCard");
+const app         = document.getElementById("app");
 const orb         = document.getElementById("orb");
 const orbEmoji    = document.getElementById("orbEmoji");
 const statusTitle = document.getElementById("statusTitle");
 const statusMsg   = document.getElementById("statusMessage");
 const outcomeBadge= document.getElementById("outcomeBadge");
 const transcript  = document.getElementById("transcript");
-const callControls= document.getElementById("callControls");
 const muteBtn     = document.getElementById("muteBtn");
 const endBtn      = document.getElementById("endBtn");
 const retryBtn    = document.getElementById("retryBtn");
 
 // ─── Outcome display config ──────────────────────────────────────────────────
 const OUTCOME_CONFIG = {
-  P1_SUCCESS:     { label: "P1 — Identity Confirmed",      cls: "P1", icon: "✅", cardState: "success",   title: "Verification Successful", msg: "You confirmed your identity. Thanks!" },
-  P2_VOICEMAIL:   { label: "P2 — Voicemail Detected",      cls: "P2", icon: "📬", cardState: "voicemail", title: "Reached Voicemail",       msg: "A voicemail/answering machine was detected." },
-  P3_UNREACHABLE: { label: "P3 — Unreachable",             cls: "P3", icon: "📵", cardState: "error",     title: "Could Not Connect",       msg: "The call couldn't be completed." },
-  P4_UNCLEAR:     { label: "P4 — Unclear / Uncooperative", cls: "P4", icon: "❓", cardState: "error",     title: "Could Not Verify",        msg: "Identity was not confirmed." },
+  P1_SUCCESS:     { label: "P1 · Confirmed",       cls: "P1", icon: "✅", cardState: "success",   title: "Verification Successful", msg: "You confirmed your identity — thanks!" },
+  P2_VOICEMAIL:   { label: "P2 · Voicemail",       cls: "P2", icon: "📬", cardState: "voicemail", title: "Reached Voicemail",       msg: "A voicemail or answering machine picked up." },
+  P3_UNREACHABLE: { label: "P3 · No Answer",       cls: "P3", icon: "📵", cardState: "error",     title: "Couldn't Connect",        msg: "The call couldn't be completed." },
+  P4_DECLINED:    { label: "P4 · Not Interested",  cls: "P4", icon: "🚫", cardState: "warning",   title: "Declined",                msg: "We reached the person, but they weren't interested." },
+  P5_WRONG_PERSON:{ label: "P5 · Wrong Person",    cls: "P5", icon: "🙅", cardState: "neutral",   title: "Not the Right Person",    msg: "We reached someone, but not the person we were verifying." },
+  P6_UNCLEAR:     { label: "P6 · Unclear",         cls: "P6", icon: "🤔", cardState: "muted",     title: "Couldn't Tell",           msg: "We reached someone, but couldn't confirm the outcome." },
 };
 
 // ─── State ───────────────────────────────────────────────────────────────────
@@ -75,13 +76,13 @@ function describeError(e) {
 }
 function safeJson(v) { try { return JSON.stringify(v); } catch { return String(v); } }
 
-function setStatus(icon, orbClass, title, msg, cardState) {
+function setStatus(icon, orbClass, title, msg, tone) {
   orbEmoji.textContent = icon;
   orb.className = `orb ${orbClass}`;
   orb.style.boxShadow = ""; // clear any volume-driven glow from a prior call
   statusTitle.textContent = title;
   statusMsg.textContent   = msg;
-  statusCard.className     = `status-card ${cardState ? "state-" + cardState : ""}`;
+  app.dataset.tone = tone || ""; // accent hook for the result area
 }
 
 function appendTranscript(role, text) {
@@ -105,7 +106,6 @@ function appendTranscript(role, text) {
     transcript.appendChild(line);
     lastTranscriptRole = norm;
   }
-  transcript.classList.add("show");
   transcript.scrollTop = transcript.scrollHeight;
 }
 
@@ -121,13 +121,11 @@ function resetToIdle() {
   lastTranscriptRole = null;
   window.__clearBootError?.();
   showStartButtonLoading(false);
-  statusCard.style.display = "none";
+  app.dataset.state = "idle";
+  app.dataset.tone = "";
   outcomeBadge.className = "outcome-badge";
   outcomeBadge.textContent = "";
-  transcript.className = "transcript";
   transcript.innerHTML = "";
-  callControls.className = "call-controls";
-  retryBtn.className = "retry-btn";
   nameError.style.display = "none";
   nameInput.classList.remove("error-input");
   muteBtn.classList.remove("muted");
@@ -136,21 +134,21 @@ function resetToIdle() {
 
 function renderResult(code) {
   inCall = false;
-  callControls.className = "call-controls"; // hide
   showStartButtonLoading(false);
+  app.dataset.state = "result";
 
   if (!code) {
     // Call ended without a recorded outcome (e.g. hung up early, or the agent
     // never heard you and timed out on silence) — stay neutral and nudge the mic.
-    setStatus("☎️", "error", "Call Ended",
-      "The call ended before a result was recorded. If you didn't get to speak, check that your microphone is working and try again.", "error");
+    outcomeBadge.className = "outcome-badge";
+    setStatus("☎️", "muted", "Call Ended",
+      "The call ended before a result was recorded. If you didn't get to speak, check your microphone and try again.", "muted");
   } else {
-    const cfg = OUTCOME_CONFIG[code] || OUTCOME_CONFIG.P4_UNCLEAR;
+    const cfg = OUTCOME_CONFIG[code] || OUTCOME_CONFIG.P6_UNCLEAR;
     setStatus(cfg.icon, cfg.cardState, cfg.title, cfg.msg, cfg.cardState);
     outcomeBadge.textContent = cfg.label;
     outcomeBadge.className = `outcome-badge show ${cfg.cls}`;
   }
-  retryBtn.className = "retry-btn show";
 }
 
 // ─── Vapi event wiring ───────────────────────────────────────────────────────
@@ -158,19 +156,28 @@ if (vapi) {
   vapi.on("call-start", () => {
     inCall = true;
     showStartButtonLoading(false);
-    callControls.className = "call-controls show";
-    setStatus("🎙️", "live", "Connected", "You're live with Freya — just talk naturally.", null);
+    app.dataset.state = "calling";
+    setStatus("🎙️", "live", "Connected", "You're live with Freya — just talk naturally.", "");
   });
 
   vapi.on("call-end", () => {
     renderResult(outcome);
   });
 
-  // Make the orb pulse with Freya's voice while she speaks.
+  // Make the orb pulse with Freya's voice while she speaks. volume-level fires
+  // very frequently and animating a large blurred box-shadow per event is a
+  // repaint hot spot — coalesce to at most one update per animation frame.
+  let pendingLvl = 0, glowQueued = false;
   vapi.on("volume-level", (v) => {
     if (!inCall) return;
-    const lvl = Math.max(0, Math.min(1, Number(v) || 0));
-    orb.style.boxShadow = `0 0 ${16 + lvl * 46}px ${4 + lvl * 12}px rgba(99,102,241,${0.18 + lvl * 0.5})`;
+    pendingLvl = Math.max(0, Math.min(1, Number(v) || 0));
+    if (glowQueued) return;
+    glowQueued = true;
+    requestAnimationFrame(() => {
+      glowQueued = false;
+      const lvl = pendingLvl;
+      orb.style.boxShadow = `0 0 ${16 + lvl * 46}px ${4 + lvl * 12}px rgba(99,102,241,${0.18 + lvl * 0.5})`;
+    });
   });
 
   vapi.on("message", (m) => {
@@ -206,7 +213,6 @@ if (vapi) {
     // Don't alarm the user; let the call-end handler render the result.
     if (low.includes("meeting has ended") || low.includes("meeting ended") || low.includes("ejected")) {
       inCall = false;
-      callControls.className = "call-controls";
       return;
     }
 
@@ -217,9 +223,9 @@ if (vapi) {
       msg = "No microphone found. Plug one in and try again.";
     }
     inCall = false;
-    callControls.className = "call-controls";
+    outcomeBadge.className = "outcome-badge";
+    app.dataset.state = "result";
     setStatus("⚠️", "error", "Call Error", msg, "error");
-    retryBtn.className = "retry-btn show";
     showStartButtonLoading(false);
   });
 }
@@ -230,7 +236,8 @@ if (vapi) {
 startForm.addEventListener("submit", async (e) => {
   e.preventDefault();
   if (!vapi || !PUBLIC_KEY || !ASSISTANT_ID) {
-    statusCard.style.display = "block";
+    outcomeBadge.className = "outcome-badge";
+    app.dataset.state = "result";
     setStatus("⚠️", "error", "Not Configured",
       "Missing VITE_VAPI_PUBLIC_KEY or VITE_VAPI_ASSISTANT_ID. Set them and rebuild.", "error");
     return;
@@ -248,16 +255,14 @@ startForm.addEventListener("submit", async (e) => {
   // Address by first name only — sounds far more natural than the full name.
   const name = fullName.split(/\s+/)[0] || fullName;
 
-  // Reset card to a fresh connecting state
+  // Switch to the live console in a fresh connecting state
   outcome = null;
   lastTranscriptRole = null;
   window.__clearBootError?.();
-  transcript.className = "transcript";
   transcript.innerHTML = "";
   outcomeBadge.className = "outcome-badge";
-  retryBtn.className = "retry-btn";
-  statusCard.style.display = "block";
-  setStatus("🎙️", "pending", "Connecting…", "Allow microphone access to begin.", null);
+  app.dataset.state = "calling";
+  setStatus("🎙️", "pending", "Connecting…", "Allow microphone access to begin.", "");
   showStartButtonLoading(true);
 
   try {
@@ -265,9 +270,10 @@ startForm.addEventListener("submit", async (e) => {
   } catch (err) {
     console.error("[vapi] start failed", err);
     const detail = describeError(err);
+    outcomeBadge.className = "outcome-badge";
+    app.dataset.state = "result";
     setStatus("⚠️", "error", "Couldn't Start", detail, "error");
     if (window.__showBootError) window.__showBootError("⚠️ Start failed: " + detail);
-    retryBtn.className = "retry-btn show";
     showStartButtonLoading(false);
   }
 });

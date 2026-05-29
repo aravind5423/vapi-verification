@@ -5,7 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>AI Voice Verification</title>
   <meta name="description" content="AI-powered identity verification — a quick voice call, right in your browser." />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
   <script>
     // Polyfill Node globals that the Vapi SDK's Daily.co engine expects in the browser.
     window.global = window.global || window;
@@ -31,53 +32,74 @@
   </script>
 </head>
 <body>
-  <div class="blob"></div>
-  <div class="blob2"></div>
+  <div class="bg-blob bg-blob-1"></div>
+  <div class="bg-blob bg-blob-2"></div>
 
-  <div class="container">
-    <div id="bootError" class="boot-error" style="display:none"></div>
-    <div class="header">
-      <div class="badge">Voice AI</div>
-      <h1>AI Verification</h1>
-      <p class="subtitle">Start a quick voice verification — right here in your browser. Make sure your microphone is on.</p>
-    </div>
+  <main class="app" id="app" data-state="idle" data-tone="">
+    <div class="boot-error" id="bootError" style="display:none"></div>
 
-    <!-- Idle: start form -->
-    <form id="startForm" novalidate>
-      <div class="form-group">
-        <label for="name">Your Name</label>
-        <input type="text" id="name" placeholder="e.g. John Doe" autocomplete="name" />
-        <div class="field-error" id="nameError">Please enter your name.</div>
+    <!-- ░░ LEFT PANE ░░ -->
+    <section class="pane pane-left">
+      <!-- Idle: hero + how-it-works -->
+      <div class="hero">
+        <div class="badge">Voice AI</div>
+        <h1>AI Voice<br />Verification</h1>
+        <p class="subtitle">A quick, friendly voice check with Freya — right in your browser. No phone, no downloads, about 30 seconds.</p>
+        <ol class="steps">
+          <li>
+            <span class="step-n">1</span>
+            <div class="step-txt"><strong>Enter your name</strong><span>So Freya knows who she's reaching.</span></div>
+          </li>
+          <li>
+            <span class="step-n">2</span>
+            <div class="step-txt"><strong>Allow your mic</strong><span>The call runs over your browser audio.</span></div>
+          </li>
+          <li>
+            <span class="step-n">3</span>
+            <div class="step-txt"><strong>Talk to Freya</strong><span>Answer naturally — the result shows live.</span></div>
+          </li>
+        </ol>
       </div>
 
-      <button type="submit" id="startBtn">
-        <div class="btn-inner">
-          <span id="startBtnText">Start verification call</span>
-          <div class="spinner" id="spinner"></div>
+      <!-- Calling / result: live status -->
+      <div class="call-status">
+        <div class="orb pending" id="orb"><span class="orb-emoji" id="orbEmoji">🎙️</span></div>
+        <div class="status-title" id="statusTitle">Connecting…</div>
+        <div class="status-message" id="statusMessage">Allow microphone access to begin.</div>
+        <div class="outcome-badge" id="outcomeBadge"></div>
+        <div class="call-controls" id="callControls">
+          <button class="ctrl-btn" id="muteBtn" type="button">Mute</button>
+          <button class="ctrl-btn danger" id="endBtn" type="button">End call</button>
         </div>
-      </button>
-    </form>
-
-    <!-- In-call / result card -->
-    <div class="status-card" id="statusCard">
-      <div class="orb pending" id="orb">
-        <span class="orb-emoji" id="orbEmoji">🎙️</span>
+        <button class="retry-btn" id="retryBtn" type="button">↩ Start a new verification</button>
       </div>
-      <div class="status-title" id="statusTitle">Connecting…</div>
-      <div class="status-message" id="statusMessage">Allow microphone access to begin.</div>
+    </section>
 
-      <div class="outcome-badge" id="outcomeBadge"></div>
+    <!-- ░░ RIGHT PANE ░░ -->
+    <section class="pane pane-right">
+      <!-- Idle: start card -->
+      <form class="start-card" id="startForm" novalidate>
+        <div class="form-group">
+          <label for="name">Your name</label>
+          <input type="text" id="name" placeholder="e.g. John Doe" autocomplete="name" />
+          <div class="field-error" id="nameError">Please enter your name.</div>
+        </div>
+        <button type="submit" id="startBtn">
+          <div class="btn-inner">
+            <span id="startBtnText">Start verification call</span>
+            <div class="spinner" id="spinner"></div>
+          </div>
+        </button>
+        <p class="reassure">~30 seconds · microphone only · nothing is stored</p>
+      </form>
 
-      <div class="transcript" id="transcript"></div>
-
-      <div class="call-controls" id="callControls">
-        <button class="ctrl-btn" id="muteBtn" type="button">Mute</button>
-        <button class="ctrl-btn danger" id="endBtn" type="button">End call</button>
+      <!-- Calling / result: live transcript -->
+      <div class="transcript-panel">
+        <div class="transcript-head"><span class="live-dot"></span><span id="transcriptHeadLabel">Live transcript</span></div>
+        <div class="transcript" id="transcript"></div>
       </div>
-
-      <button class="retry-btn" id="retryBtn" type="button">↩ Start a new verification</button>
-    </div>
-  </div>
+    </section>
+  </main>
 
   <script type="module" src="/src/main.js"></script>
 </body>
