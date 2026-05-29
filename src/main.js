@@ -197,7 +197,13 @@ if (vapi) {
       const fnName = c?.function?.name ?? c?.name;
       if (fnName === "set_outcome") {
         const args = parseArgs(c?.function?.arguments ?? c?.arguments ?? c?.parameters);
-        if (typeof args?.outcome === "string") outcome = args.outcome;
+        if (typeof args?.outcome === "string") {
+          outcome = args.outcome;
+          // Show the result the instant it's decided — don't wait for the ~7s
+          // endCallPhrases hangup. Freya's goodbye keeps playing meanwhile, and
+          // call-end will re-render the same result (idempotent).
+          if (inCall) renderResult(outcome);
+        }
       }
     }
   });
@@ -261,6 +267,25 @@ startForm.addEventListener("submit", async (e) => {
   app.dataset.state = "calling";
   setStatus("🎙️", "pending", "Connecting…", "Allow microphone access to begin.", "");
   showStartButtonLoading(true);
+
+  // Pre-warm the mic so the permission prompt + device init finish BEFORE the call —
+  // the usual cause of a flaky first call. Release it right away so the SDK can claim it.
+  try {
+    const warm = await navigator.mediaDevices.getUserMedia({ audio: true });
+    warm.getTracks().forEach((t) => t.stop());
+  } catch (err) {
+    console.error("[mic] pre-warm failed", err);
+    const nm = err?.name || "";
+    const msg =
+      nm === "NotAllowedError" || nm === "SecurityError" ? "Microphone access is required — allow your mic and try again." :
+      nm === "NotFoundError" || nm === "OverconstrainedError" ? "No microphone found. Plug one in and try again." :
+      "Couldn't access the microphone: " + (err?.message || nm || "unknown error");
+    outcomeBadge.className = "outcome-badge";
+    app.dataset.state = "result";
+    setStatus("⚠️", "error", "Microphone Needed", msg, "error");
+    showStartButtonLoading(false);
+    return;
+  }
 
   // Guard against a call that never connects (keeps the spinner from hanging forever).
   clearTimeout(connectTimer);

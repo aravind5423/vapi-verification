@@ -51,13 +51,12 @@ HOW TO END THE CALL — read carefully, this controls whether your voice gets cu
 Every call ends in exactly ONE of two ways. Never mix them.
 
 (1) SPOKEN ENDING — use this for Scenarios A, C, D, E and the "couldn't understand" case (any scenario with a closing line):
-    Step 1 — call set_outcome with the correct code.
-    Step 2 — SAY the closing line out loud. It MUST end with the exact words "Have a good day."
-             or "Have a great rest of your day!" as your VERY LAST words.
-    Step 3 — STOP. Do NOT call endCall. Do NOT add a second goodbye or any filler.
-             The call hangs up on its own the moment you finish the closing line.
-    ⚠️ NEVER call the endCall function in a spoken-ending scenario — it would cut off your own
-       voice mid-sentence. Just say the line and stop.
+    In ONE single reply (no extra turns, no delay): call set_outcome with the correct code AND say the
+    closing line out loud, together. The closing line MUST end with the exact words "Have a good day."
+    or "Have a great rest of your day!" as your VERY LAST words.
+    ⚠️ Do NOT add a separate little reaction ("oh, no worries…") as its own turn before the closing line,
+       and do NOT split the ending across multiple turns — say the WHOLE closing line in that one reply,
+       then STOP. Do NOT call endCall (the call hangs up on its own once you finish the line). No second goodbye.
 
 (2) SILENT ENDING — use this ONLY for Scenario F (voicemail) and Scenario G (dead air):
     Step 1 — call set_outcome with the correct code.
@@ -168,9 +167,17 @@ const config = {
   backgroundDenoisingEnabled: true,
   maxDurationSeconds: 377,
   // Don't just cut a silent caller off — nudge them like a human, twice, then end.
+  // A varied pool so Freya doesn't repeat the same robotic line each time.
   silenceTimeoutSeconds: 30,
   messagePlan: {
-    idleMessages: ["Hello? Are you still there?", "Sorry — I think we got cut off. You there?"],
+    idleMessages: [
+      "Hello? You still there?",
+      "Sorry — did I lose you?",
+      "Hey, can you still hear me?",
+      "Oh, I think you cut out — you there?",
+      "Still with me?",
+      "Hmm, you there?",
+    ],
     idleTimeoutSeconds: 7,
     idleMessageMaxSpokenCount: 2,
   },
