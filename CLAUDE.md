@@ -6,7 +6,7 @@ Guidance for working in this repo.
 A **browser-based AI voice verification** app. A visitor enters their name, clicks Start, and has a live voice conversation with an AI agent ("Freya") **in the browser** via the Vapi Web SDK (`@vapi-ai/web`). Freya runs a short "pulse check" survey and records an outcome (`P1`–`P6`) that the page shows in real time. No phone calls, no Twilio — the call is WebRTC mic/speakers.
 
 ## Architecture (read this first)
-- **Pure static SPA built with Vite.** There is **no backend / no `api/` functions / no database.** (The old phone-calling serverless backend was removed — see git history if curious.)
+- **Vite SPA + one tiny serverless function.** The UI is a static Vite SPA. There is **no database** and **no phone-calling backend** (the old one was removed — see git history). The **one** server-side piece is `api/outcome.js` (a Vercel function): a fallback that fetches a call's authoritative outcome from Vapi when the in-call `set_outcome` is missed. The happy path never touches it.
 - **The agent lives in the Vapi dashboard, not in this code.** The frontend only starts a dashboard assistant *by ID*. The system prompt, voice, tools, and `set_outcome` function are all configured on the Vapi assistant.
   - To change agent behavior (prompt/voice/tools): edit the dashboard assistant, or re-run `scripts/configure-assistant.mjs`. **Do not look for the prompt in the frontend** — it isn't there.
 - **Outcome capture is client-side.** The dashboard assistant calls an **async** `set_outcome` tool; with the assistant's **clientMessages including `tool-calls`**, that arrives in the browser via `vapi.on('message')` and is read in `src/main.js`.
@@ -17,7 +17,11 @@ Browser SPA  ──>  new Vapi(VITE_VAPI_PUBLIC_KEY)
              ──>  vapi.on('message')  → set_outcome (P1–P6) captured
              ──>  vapi.on('speech-end') → reveal the result card (when Freya finishes the goodbye)
              ──>  vapi.on('volume-level' / 'call-start' / 'call-end' / 'error') → UI/state
+             ──>  call-end with NO set_outcome → GET /api/outcome?callId=… (server reads
+                  the call's set_outcome / analysis.structuredData) → render the P-code
 ```
+
+The **safety net** has two layers: (1) `analysisPlan.structuredDataPlan` on the assistant classifies every call from its transcript server-side (`call.analysis.structuredData.outcome`, 30s timeout); (2) `api/outcome.js` lets the browser read that (or a late `set_outcome`) when the live tool call is missed, so the on-screen result is robust without a model retry. Needs **`VAPI_PRIVATE_KEY`** as a Vercel **server** env var (never `VITE_`-prefixed). Local full-stack test: `vercel dev` (plain `vite dev` returns 404 for `/api/outcome`, and the client falls back to the neutral card).
 
 ## Commands
 ```bash

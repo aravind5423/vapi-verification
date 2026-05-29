@@ -43,6 +43,7 @@ const retryBtn    = document.getElementById("retryBtn");
 // ─── State ───────────────────────────────────────────────────────────────────
 const vapi = (PUBLIC_KEY && Vapi) ? new Vapi(PUBLIC_KEY) : null;
 let outcome = null;     // last set_outcome captured this call
+let currentCallId = null; // Vapi call id — used to fetch the result server-side if set_outcome is missed
 let inCall  = false;
 let connecting = false; // submitted, mic/connect in flight — guards double-submit
 let connectTimer = null; // guards against a never-connecting call (hung spinner)
@@ -71,6 +72,7 @@ function showStartButtonLoading(loading) {
 
 function resetToIdle() {
   outcome = null;
+  currentCallId = null;
   inCall = false;
   awaitingResult = false;
   clearTimeout(connectTimer);
@@ -106,6 +108,49 @@ function renderResult(code) {
   }
 }
 
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Called at call-end. If the in-call set_outcome was captured, render it. If it
+// wasn't (the model occasionally skips the tool), ask the server for Vapi's
+// authoritative result before falling back to the neutral "Call Ended" card.
+async function finalizeResult() {
+  if (outcome) { renderResult(outcome); return; }
+  if (!currentCallId) { renderResult(null); return; }
+
+  // Interim state while we confirm server-side (the analysis runs post-call).
+  inCall = false;
+  showStartButtonLoading(false);
+  app.dataset.state = "result";
+  app.dataset.tone = "";
+  outcomeBadge.className = "outcome-badge";
+  setStatus("⏳", "pending", "Finalizing…", "Just a moment while we confirm the result.", "");
+
+  const resolved = await pollServerOutcome(currentCallId);
+  // A late in-call outcome wins if one somehow arrived while we were polling.
+  renderResult(outcome || resolved);
+}
+
+// Poll the serverless resolver until it returns an outcome, says it can't, or we
+// give up. Bails immediately if there's no backend (plain `vite dev` → 404).
+async function pollServerOutcome(callId, attempts = 8, delayMs = 3000) {
+  for (let i = 0; i < attempts; i++) {
+    if (outcome) return outcome; // in-call result arrived late — stop polling
+    try {
+      const r = await fetch(`/api/outcome?callId=${encodeURIComponent(callId)}`);
+      if (r.status === 404) return null;        // no backend deployed — don't hang the UI
+      if (r.ok) {
+        const data = await r.json();
+        if (data?.outcome) return data.outcome;
+        if (!data?.pending) return null;         // analysis finished but couldn't classify
+      }
+    } catch (err) {
+      console.error("[outcome] server poll failed", err);
+    }
+    if (i < attempts - 1) await sleep(delayMs);
+  }
+  return null;
+}
+
 // ─── Vapi event wiring ───────────────────────────────────────────────────────
 if (vapi) {
   vapi.on("call-start", () => {
@@ -122,7 +167,7 @@ if (vapi) {
     clearTimeout(connectTimer);
     clearTimeout(resultFallbackTimer);
     awaitingResult = false;
-    renderResult(outcome);
+    finalizeResult();
   });
 
   // Freya finished a spoken turn. If the outcome is already recorded, this is the
@@ -245,6 +290,7 @@ startForm.addEventListener("submit", async (e) => {
 
   // Switch to the live call view in a fresh connecting state
   outcome = null;
+  currentCallId = null;
   window.__clearBootError?.();
   outcomeBadge.className = "outcome-badge";
   app.dataset.state = "calling";
@@ -283,7 +329,10 @@ startForm.addEventListener("submit", async (e) => {
   }, 20000);
 
   try {
-    await vapi.start(ASSISTANT_ID, { variableValues: { name } });
+    const started = await vapi.start(ASSISTANT_ID, { variableValues: { name } });
+    // Remember the call id so we can fetch the authoritative outcome server-side
+    // if the in-call set_outcome never reaches us.
+    currentCallId = started?.id ?? started?.callId ?? currentCallId;
   } catch (err) {
     console.error("[vapi] start failed", err);
     clearTimeout(connectTimer);
