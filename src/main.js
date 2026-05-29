@@ -219,8 +219,11 @@ startForm.addEventListener("submit", async (e) => {
   nameError.style.display = "none";
   nameInput.classList.remove("error-input");
 
-  // Address by first name only — sounds far more natural than the full name.
-  const name = fullName.split(/\s+/)[0] || fullName;
+  // First name only, normalized to Title-case. An ALL-CAPS name like "NEELANSH"
+  // makes the TTS spell it letter-by-letter ("N-E-E-L-A-N-S-H"), so force a single
+  // leading capital with the rest lowercase before handing it to Freya.
+  const first = fullName.split(/\s+/)[0] || fullName;
+  const name = first.charAt(0).toUpperCase() + first.slice(1).toLowerCase();
 
   // Switch to the live call view in a fresh connecting state
   outcome = null;
