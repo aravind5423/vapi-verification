@@ -148,14 +148,17 @@ const config = {
     model: "sonic-3.5",
     voiceId: "00a77add-48d5-4ef6-8157-71e5437b282d", // Cartesia "Callie" (confirmed working)
     generationConfig: { speed: 1.0, volume: 1.2 },
-    experimentalControls: { emotion: ["curiosity:high", "sadness:low", "positivity:high"] },
+    // Feed the TTS larger, sentence-ish chunks so audio streams smoothly instead of
+    // stuttering on tiny fragments. (experimentalControls/emotion removed — that
+    // experimental feature was a likely source of mid-call audio artifacts.)
+    chunkPlan: { enabled: true, minCharacters: 40 },
   },
   transcriber: { provider: "deepgram", model: "nova-3", language: "en" },
   firstMessage: "Hi, um, is this {{name}}?",
   firstMessageMode: "assistant-speaks-first",
   endCallFunctionEnabled: true,
   endCallPhrases: ["have a great rest of your day", "have a good day", "have a great day", "have a wonderful day", "take care now"],
-  backgroundSound: "office",
+  backgroundSound: "off", // clean audio bed — the ambient "office" track could muddy/stutter the voice
   backgroundDenoisingEnabled: true,
   maxDurationSeconds: 377,
   voicemailDetection: {
@@ -166,15 +169,9 @@ const config = {
   startSpeakingPlan: { waitSeconds: 0.4, smartEndpointingPlan: { provider: "vapi" } },
   stopSpeakingPlan: { numWords: 2, voiceSeconds: 0.3, backoffSeconds: 1 },
   // CRITICAL for web calls: deliver these events to the browser SDK. "tool-calls"
-  // is how the page receives the set_outcome result.
-  clientMessages: [
-    "tool-calls",
-    "function-call",
-    "transcript",
-    "status-update",
-    "speech-update",
-    "conversation-update",
-  ],
+  // is how the page receives the set_outcome result. Trimmed to the minimum — the
+  // page no longer renders transcripts, so fewer mid-call events = less browser jank.
+  clientMessages: ["tool-calls", "function-call"],
 };
 
 // Preferred model first; Vapi validates model IDs server-side, so if it rejects

@@ -35,7 +35,6 @@ const orbEmoji    = document.getElementById("orbEmoji");
 const statusTitle = document.getElementById("statusTitle");
 const statusMsg   = document.getElementById("statusMessage");
 const outcomeBadge= document.getElementById("outcomeBadge");
-const transcript  = document.getElementById("transcript");
 const muteBtn     = document.getElementById("muteBtn");
 const endBtn      = document.getElementById("endBtn");
 const retryBtn    = document.getElementById("retryBtn");
@@ -54,7 +53,6 @@ const OUTCOME_CONFIG = {
 const vapi = (PUBLIC_KEY && Vapi) ? new Vapi(PUBLIC_KEY) : null;
 let outcome = null;     // last set_outcome captured this call
 let inCall  = false;
-let lastTranscriptRole = null;  // for merging consecutive same-speaker segments
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 function parseArgs(raw) {
@@ -85,30 +83,6 @@ function setStatus(icon, orbClass, title, msg, tone) {
   app.dataset.tone = tone || ""; // accent hook for the result area
 }
 
-function appendTranscript(role, text) {
-  if (!text) return;
-  const norm = role === "assistant" ? "assistant" : "user";
-  const lastLine = transcript.lastElementChild;
-
-  // The transcriber emits one utterance as several "final" chunks; merge
-  // consecutive segments from the same speaker so they read as one turn
-  // instead of a new prefixed line per fragment.
-  if (lastLine && lastTranscriptRole === norm) {
-    const what = lastLine.querySelector(".what");
-    what.textContent = `${what.textContent} ${text}`.trim();
-  } else {
-    const who = norm === "assistant" ? "Freya" : "You";
-    const line = document.createElement("div");
-    line.className = `line ${norm}`;
-    line.innerHTML = `<span class="who"></span><span class="what"></span>`;
-    line.querySelector(".who").textContent = who;
-    line.querySelector(".what").textContent = text;
-    transcript.appendChild(line);
-    lastTranscriptRole = norm;
-  }
-  transcript.scrollTop = transcript.scrollHeight;
-}
-
 function showStartButtonLoading(loading) {
   startBtn.disabled = loading;
   startBtnText.textContent = loading ? "Connecting…" : "Start verification call";
@@ -118,14 +92,12 @@ function showStartButtonLoading(loading) {
 function resetToIdle() {
   outcome = null;
   inCall = false;
-  lastTranscriptRole = null;
   window.__clearBootError?.();
   showStartButtonLoading(false);
   app.dataset.state = "idle";
   app.dataset.tone = "";
   outcomeBadge.className = "outcome-badge";
   outcomeBadge.textContent = "";
-  transcript.innerHTML = "";
   nameError.style.display = "none";
   nameInput.classList.remove("error-input");
   muteBtn.classList.remove("muted");
@@ -182,11 +154,6 @@ if (vapi) {
 
   vapi.on("message", (m) => {
     if (!m) return;
-
-    // Live transcript
-    if (m.type === "transcript" && m.transcriptType === "final") {
-      appendTranscript(m.role, m.transcript);
-    }
 
     // Capture the set_outcome tool call (modern tool-calls or legacy function-call)
     const calls =
@@ -255,11 +222,9 @@ startForm.addEventListener("submit", async (e) => {
   // Address by first name only — sounds far more natural than the full name.
   const name = fullName.split(/\s+/)[0] || fullName;
 
-  // Switch to the live console in a fresh connecting state
+  // Switch to the live call view in a fresh connecting state
   outcome = null;
-  lastTranscriptRole = null;
   window.__clearBootError?.();
-  transcript.innerHTML = "";
   outcomeBadge.className = "outcome-badge";
   app.dataset.state = "calling";
   setStatus("🎙️", "pending", "Connecting…", "Allow microphone access to begin.", "");
