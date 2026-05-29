@@ -213,16 +213,37 @@ const config = {
 // gpt-4.1 is the equally-reliable fallback; the chat-tuned snapshots come last.
 const MODEL_CANDIDATES = ["gpt-4o", "gpt-4.1", "chatgpt-4o-latest", "gpt-5.2-chat-latest"];
 
+// fetch with a hard timeout so a hung network call fails loudly instead of
+// leaving the script (and the terminal) blocked forever.
+async function fetchWithTimeout(url, opts, ms = 30000) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), ms);
+  try {
+    return await fetch(url, { ...opts, signal: ctrl.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function patch() {
   for (let i = 0; i < MODEL_CANDIDATES.length; i++) {
     const model = MODEL_CANDIDATES[i];
     config.model.model = model;
-    const res = await fetch(`https://api.vapi.ai/assistant/${ID}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${KEY}` },
-      body: JSON.stringify(config),
-    });
-    const text = await res.text();
+    let res, text;
+    try {
+      res = await fetchWithTimeout(`https://api.vapi.ai/assistant/${ID}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${KEY}` },
+        body: JSON.stringify(config),
+      });
+      text = await res.text();
+    } catch (err) {
+      // Network failure / DNS / timeout — not model-specific, so trying the next
+      // candidate won't help. Fail fast with an actionable message.
+      const why = err?.name === "AbortError" ? "request timed out after 30s" : (err?.message || String(err));
+      console.error(`✗ Could not reach the Vapi API (${why}). Check your connection and that api.vapi.ai is up.`);
+      process.exit(1);
+    }
     if (res.ok) return { text, model };
 
     const last = i === MODEL_CANDIDATES.length - 1;

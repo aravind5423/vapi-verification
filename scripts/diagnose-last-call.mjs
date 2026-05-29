@@ -27,7 +27,10 @@ function envFromLocal(name) {
 
 const KEY = envFromLocal("VAPI_PRIVATE_KEY");
 const ASSISTANT_ID = envFromLocal("VITE_VAPI_ASSISTANT_ID") || envFromLocal("VAPI_ASSISTANT_ID");
-const LIMIT = Number(process.argv[2] || 3);
+// Validate the CLI arg: a non-numeric / <=0 / huge value falls back to a sane 3,
+// clamped to 100 (Vapi's max page size) so we never send "NaN" or an absurd limit.
+const argN = Number(process.argv[2]);
+const LIMIT = Number.isFinite(argN) && argN > 0 ? Math.min(Math.floor(argN), 100) : 3;
 
 if (!KEY) {
   console.error("✗ VAPI_PRIVATE_KEY not found (set it in the env or add it to .env.local).");
@@ -38,12 +41,29 @@ const url = new URL("https://api.vapi.ai/call");
 if (ASSISTANT_ID) url.searchParams.set("assistantId", ASSISTANT_ID);
 url.searchParams.set("limit", String(LIMIT));
 
-const res = await fetch(url, { headers: { Authorization: `Bearer ${KEY}` } });
+let res;
+const ctrl = new AbortController();
+const timer = setTimeout(() => ctrl.abort(), 30000);
+try {
+  res = await fetch(url, { headers: { Authorization: `Bearer ${KEY}` }, signal: ctrl.signal });
+} catch (err) {
+  const why = err?.name === "AbortError" ? "request timed out after 30s" : (err?.message || String(err));
+  console.error(`✗ Could not reach the Vapi API (${why}).`);
+  process.exit(1);
+} finally {
+  clearTimeout(timer);
+}
 if (!res.ok) {
   console.error(`✗ Vapi API ${res.status}:`, await res.text());
   process.exit(1);
 }
-const calls = await res.json();
+let calls;
+try {
+  calls = await res.json();
+} catch (err) {
+  console.error("✗ Vapi API returned a non-JSON response:", err?.message || err);
+  process.exit(1);
+}
 if (!Array.isArray(calls) || calls.length === 0) {
   console.log("No calls found for this assistant.");
   process.exit(0);
@@ -62,7 +82,7 @@ calls.forEach((c, i) => {
   console.log(`  ended:         ${fmt(c.endedAt)}`);
   if (c.startedAt && c.endedAt) {
     const secs = (new Date(c.endedAt) - new Date(c.startedAt)) / 1000;
-    console.log(`  duration:      ${secs.toFixed(1)}s`);
+    console.log(`  duration:      ${Number.isFinite(secs) ? secs.toFixed(1) + "s" : "—"}`);
   }
   console.log(`  assistantId:   ${fmt(c.assistantId)}`);
 

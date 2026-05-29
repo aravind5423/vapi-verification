@@ -1,5 +1,6 @@
 import * as VapiSDK from "@vapi-ai/web";
 import "./style.css";
+import { OUTCOME_CONFIG, normalizeFirstName, parseArgs, describeError } from "./utils.js";
 
 // @vapi-ai/web ships as CommonJS (module.exports = { default: VapiClass }).
 // The default-import interop mis-resolves in the production bundle
@@ -39,71 +40,18 @@ const muteBtn     = document.getElementById("muteBtn");
 const endBtn      = document.getElementById("endBtn");
 const retryBtn    = document.getElementById("retryBtn");
 
-// ─── Outcome display config ──────────────────────────────────────────────────
-const OUTCOME_CONFIG = {
-  P1_SUCCESS:     { label: "P1 · Confirmed",       cls: "P1", icon: "✅", cardState: "success",   title: "Verification Successful", msg: "You confirmed your identity — thanks!" },
-  P2_VOICEMAIL:   { label: "P2 · Voicemail",       cls: "P2", icon: "📬", cardState: "voicemail", title: "Reached Voicemail",       msg: "A voicemail or answering machine picked up." },
-  P3_UNREACHABLE: { label: "P3 · No Answer",       cls: "P3", icon: "📵", cardState: "error",     title: "Couldn't Connect",        msg: "The call couldn't be completed." },
-  P4_DECLINED:    { label: "P4 · Not Interested",  cls: "P4", icon: "🚫", cardState: "warning",   title: "Declined",                msg: "We reached the person, but they weren't interested." },
-  P5_WRONG_PERSON:{ label: "P5 · Wrong Person",    cls: "P5", icon: "🙅", cardState: "neutral",   title: "Not the Right Person",    msg: "We reached someone, but not the person we were verifying." },
-  P6_UNCLEAR:     { label: "P6 · Unclear",         cls: "P6", icon: "🤔", cardState: "muted",     title: "Couldn't Tell",           msg: "We reached someone, but couldn't confirm the outcome." },
-};
-
 // ─── State ───────────────────────────────────────────────────────────────────
 const vapi = (PUBLIC_KEY && Vapi) ? new Vapi(PUBLIC_KEY) : null;
 let outcome = null;     // last set_outcome captured this call
 let inCall  = false;
+let connecting = false; // submitted, mic/connect in flight — guards double-submit
 let connectTimer = null; // guards against a never-connecting call (hung spinner)
 let awaitingResult = false;   // outcome captured; waiting for Freya to finish the goodbye
 let resultFallbackTimer = null;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
-// Pull a clean, speakable first name out of whatever the user typed. Handles
-// honorifics ("Mr.Ara" → "Ara"), ALL-CAPS (→ Title-case so the TTS says it as a
-// word instead of spelling it), initials, punctuation and stray whitespace.
-// Returns "" if there's no real (letter-containing) name.
-const HONORIFICS = new Set([
-  "mr","mrs","ms","miss","mx","dr","prof","professor","sir","madam","maam","rev","fr","hon",
-]);
-function normalizeFirstName(raw) {
-  const tokens = String(raw || "")
-    .replace(/[.,]/g, " ")     // split "Mr.Ara" and initials
-    .trim()
-    .split(/\s+/)
-    .filter(Boolean);
-  let i = 0;
-  while (i < tokens.length && HONORIFICS.has(tokens[i].toLowerCase().replace(/[^a-z]/g, ""))) i++;
-  const rest = tokens.slice(i);
-  const hasLetter = (t) => /[a-zA-Z]/.test(t);
-  const longEnough = (t) => t.replace(/[^a-zA-Z'-]/g, "").length >= 2;
-  const pick =
-    rest.find((t) => hasLetter(t) && longEnough(t)) ||
-    rest.find(hasLetter) ||
-    tokens.find(hasLetter) ||   // fallback: even an honorific-only edge
-    "";
-  const clean = pick.replace(/[^a-zA-Z'-]/g, "");
-  if (!clean) return "";
-  return clean.charAt(0).toUpperCase() + clean.slice(1).toLowerCase();
-}
-
-function parseArgs(raw) {
-  if (!raw) return {};
-  if (typeof raw === "string") {
-    try { return JSON.parse(raw); } catch { return {}; }
-  }
-  return raw;
-}
-
-function describeError(e) {
-  if (!e) return "Unknown error";
-  if (typeof e === "string") return e;
-  const m =
-    e?.error?.message || e?.errorMsg || e?.message ||
-    e?.error?.msg || e?.error?.error || e?.reason || e?.type;
-  if (m) return typeof m === "string" ? m : safeJson(m);
-  return safeJson(e);
-}
-function safeJson(v) { try { return JSON.stringify(v); } catch { return String(v); } }
+// (normalizeFirstName / parseArgs / describeError live in ./utils.js so they're
+//  unit-testable without a DOM. The DOM-bound helpers below stay here.)
 
 function setStatus(icon, orbClass, title, msg, tone) {
   orbEmoji.textContent = icon;
@@ -115,6 +63,7 @@ function setStatus(icon, orbClass, title, msg, tone) {
 }
 
 function showStartButtonLoading(loading) {
+  connecting = loading; // single source of truth for "a start is in flight"
   startBtn.disabled = loading;
   startBtnText.textContent = loading ? "Connecting…" : "Start verification call";
   spinner.style.display = loading ? "block" : "none";
@@ -204,32 +153,38 @@ if (vapi) {
   });
 
   vapi.on("message", (m) => {
-    if (!m) return;
+    // A malformed/unexpected message must never throw out of the event handler
+    // (that would silently drop every later message on some emitters).
+    try {
+      if (!m) return;
 
-    // Capture the set_outcome tool call (modern tool-calls or legacy function-call)
-    const calls =
-      m.type === "tool-calls"    ? (m.toolCallList ?? m.toolCalls ?? []) :
-      m.type === "function-call" ? [m.functionCall] :
-      [];
+      // Capture the set_outcome tool call (modern tool-calls or legacy function-call).
+      const raw =
+        m.type === "tool-calls"    ? (m.toolCallList ?? m.toolCalls ?? []) :
+        m.type === "function-call" ? [m.functionCall] :
+        [];
+      const calls = Array.isArray(raw) ? raw : [];
 
-    for (const c of calls) {
-      const fnName = c?.function?.name ?? c?.name;
-      if (fnName === "set_outcome") {
+      for (const c of calls) {
+        const fnName = c?.function?.name ?? c?.name;
+        if (fnName !== "set_outcome") continue;
         const args = parseArgs(c?.function?.arguments ?? c?.arguments ?? c?.parameters);
-        if (typeof args?.outcome === "string") {
-          outcome = args.outcome;
-          // Don't flip the UI yet — wait for Freya to FINISH the closing line
-          // (the "speech-end" below) so the result never appears before she's
-          // done talking. Fallback timer + call-end cover the rare no-speech case.
-          if (inCall) {
-            awaitingResult = true;
-            clearTimeout(resultFallbackTimer);
-            resultFallbackTimer = setTimeout(() => {
-              if (awaitingResult) { awaitingResult = false; renderResult(outcome); }
-            }, 6000);
-          }
+        const code = args?.outcome;
+        if (typeof code !== "string" || !code.trim()) continue;
+        outcome = code.trim();
+        // Don't flip the UI yet — wait for Freya to FINISH the closing line
+        // (the "speech-end" below) so the result never appears before she's
+        // done talking. Fallback timer + call-end cover the rare no-speech case.
+        if (inCall) {
+          awaitingResult = true;
+          clearTimeout(resultFallbackTimer);
+          resultFallbackTimer = setTimeout(() => {
+            if (awaitingResult) { awaitingResult = false; renderResult(outcome); }
+          }, 6000);
         }
       }
+    } catch (err) {
+      console.error("[vapi] failed to handle message", err);
     }
   });
 
@@ -266,6 +221,9 @@ if (vapi) {
 // call instead of triggering the browser's default form submit (a page reload).
 startForm.addEventListener("submit", async (e) => {
   e.preventDefault();
+  // Ignore a second submit (double-click, Enter-spam) while a call is connecting
+  // or live — otherwise we'd fire a second vapi.start and leak a parallel call.
+  if (inCall || connecting) return;
   if (!vapi || !PUBLIC_KEY || !ASSISTANT_ID) {
     outcomeBadge.className = "outcome-badge";
     app.dataset.state = "result";
@@ -316,7 +274,7 @@ startForm.addEventListener("submit", async (e) => {
   clearTimeout(connectTimer);
   connectTimer = setTimeout(() => {
     if (inCall) return;
-    try { vapi.stop(); } catch {}
+    try { vapi.stop(); } catch (err) { console.error("[vapi] stop() on connect-timeout failed", err); }
     outcomeBadge.className = "outcome-badge";
     app.dataset.state = "result";
     setStatus("⚠️", "error", "Couldn't Connect",
@@ -340,14 +298,26 @@ startForm.addEventListener("submit", async (e) => {
 
 muteBtn.addEventListener("click", () => {
   if (!vapi || !inCall) return;
-  const next = !vapi.isMuted();
-  vapi.setMuted(next);
-  muteBtn.textContent = next ? "Unmute" : "Mute";
-  muteBtn.classList.toggle("muted", next);
+  try {
+    const next = !vapi.isMuted();
+    vapi.setMuted(next);
+    muteBtn.textContent = next ? "Unmute" : "Mute";
+    muteBtn.classList.toggle("muted", next);
+  } catch (err) {
+    console.error("[vapi] toggling mute failed", err);
+  }
 });
 
 endBtn.addEventListener("click", () => {
-  if (vapi && inCall) vapi.stop();
+  if (!vapi || !inCall) return;
+  try { vapi.stop(); } catch (err) { console.error("[vapi] stop() from End button failed", err); }
 });
 
-retryBtn.addEventListener("click", resetToIdle);
+retryBtn.addEventListener("click", () => {
+  // Defensive: retry is only shown on the result screen, but if a call were
+  // somehow still live, tear it down before resetting so it can't run on silently.
+  if (vapi && inCall) {
+    try { vapi.stop(); } catch (err) { console.error("[vapi] stop() on retry failed", err); }
+  }
+  resetToIdle();
+});
