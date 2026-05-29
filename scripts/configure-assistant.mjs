@@ -155,10 +155,11 @@ const config = {
     model: "sonic-3.5",
     voiceId: "00a77add-48d5-4ef6-8157-71e5437b282d", // Cartesia "Callie" (confirmed working)
     generationConfig: { speed: 1.0, volume: 1.2 },
-    // Chunk the TTS into small sentence-ish pieces: big enough to stay smooth,
-    // small enough that Freya starts speaking quickly after the user stops.
+    // Feed the TTS sentence-ish chunks (>=40 chars) so audio streams SMOOTHLY.
+    // Smaller chunks start a hair faster but stutter/gap on marginal networks, so
+    // keep this at 40 and get snappiness from startSpeakingPlan.waitSeconds instead.
     // (experimentalControls/emotion removed — a likely source of audio artifacts.)
-    chunkPlan: { enabled: true, minCharacters: 20 },
+    chunkPlan: { enabled: true, minCharacters: 40 },
   },
   transcriber: { provider: "deepgram", model: "nova-3", language: "en" },
   firstMessage: "Hi, um, is this {{name}}?",
