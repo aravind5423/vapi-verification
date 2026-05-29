@@ -153,10 +153,10 @@ const config = {
     model: "sonic-3.5",
     voiceId: "00a77add-48d5-4ef6-8157-71e5437b282d", // Cartesia "Callie" (confirmed working)
     generationConfig: { speed: 1.0, volume: 1.2 },
-    // Feed the TTS larger, sentence-ish chunks so audio streams smoothly instead of
-    // stuttering on tiny fragments. (experimentalControls/emotion removed — that
-    // experimental feature was a likely source of mid-call audio artifacts.)
-    chunkPlan: { enabled: true, minCharacters: 40 },
+    // Chunk the TTS into small sentence-ish pieces: big enough to stay smooth,
+    // small enough that Freya starts speaking quickly after the user stops.
+    // (experimentalControls/emotion removed — a likely source of audio artifacts.)
+    chunkPlan: { enabled: true, minCharacters: 20 },
   },
   transcriber: { provider: "deepgram", model: "nova-3", language: "en" },
   firstMessage: "Hi, um, is this {{name}}?",
@@ -186,7 +186,7 @@ const config = {
     backoffPlan: { maxRetries: 3, startAtSeconds: 1, frequencySeconds: 2.5 },
     beepMaxAwaitSeconds: 0,
   },
-  startSpeakingPlan: { waitSeconds: 0.4, smartEndpointingPlan: { provider: "vapi" } },
+  startSpeakingPlan: { waitSeconds: 0.2, smartEndpointingPlan: { provider: "vapi" } },
   stopSpeakingPlan: { numWords: 2, voiceSeconds: 0.3, backoffSeconds: 1 },
   // CRITICAL for web calls: deliver these events to the browser SDK. "tool-calls"
   // is how the page receives the set_outcome result. Trimmed to the minimum — the

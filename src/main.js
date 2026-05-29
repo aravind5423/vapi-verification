@@ -54,6 +54,8 @@ const vapi = (PUBLIC_KEY && Vapi) ? new Vapi(PUBLIC_KEY) : null;
 let outcome = null;     // last set_outcome captured this call
 let inCall  = false;
 let connectTimer = null; // guards against a never-connecting call (hung spinner)
+let awaitingResult = false;   // outcome captured; waiting for Freya to finish the goodbye
+let resultFallbackTimer = null;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 // Pull a clean, speakable first name out of whatever the user typed. Handles
@@ -121,7 +123,9 @@ function showStartButtonLoading(loading) {
 function resetToIdle() {
   outcome = null;
   inCall = false;
+  awaitingResult = false;
   clearTimeout(connectTimer);
+  clearTimeout(resultFallbackTimer);
   window.__clearBootError?.();
   showStartButtonLoading(false);
   app.dataset.state = "idle";
@@ -157,6 +161,8 @@ function renderResult(code) {
 if (vapi) {
   vapi.on("call-start", () => {
     clearTimeout(connectTimer);
+    clearTimeout(resultFallbackTimer);
+    awaitingResult = false;
     inCall = true;
     showStartButtonLoading(false);
     app.dataset.state = "calling";
@@ -165,7 +171,20 @@ if (vapi) {
 
   vapi.on("call-end", () => {
     clearTimeout(connectTimer);
+    clearTimeout(resultFallbackTimer);
+    awaitingResult = false;
     renderResult(outcome);
+  });
+
+  // Freya finished a spoken turn. If the outcome is already recorded, this is the
+  // end of her closing line — reveal the result NOW (right as she stops), so the
+  // UI never updates before she's done talking.
+  vapi.on("speech-end", () => {
+    if (awaitingResult) {
+      awaitingResult = false;
+      clearTimeout(resultFallbackTimer);
+      renderResult(outcome);
+    }
   });
 
   // Make the orb pulse with Freya's voice while she speaks. volume-level fires
@@ -199,10 +218,16 @@ if (vapi) {
         const args = parseArgs(c?.function?.arguments ?? c?.arguments ?? c?.parameters);
         if (typeof args?.outcome === "string") {
           outcome = args.outcome;
-          // Show the result the instant it's decided — don't wait for the ~7s
-          // endCallPhrases hangup. Freya's goodbye keeps playing meanwhile, and
-          // call-end will re-render the same result (idempotent).
-          if (inCall) renderResult(outcome);
+          // Don't flip the UI yet — wait for Freya to FINISH the closing line
+          // (the "speech-end" below) so the result never appears before she's
+          // done talking. Fallback timer + call-end cover the rare no-speech case.
+          if (inCall) {
+            awaitingResult = true;
+            clearTimeout(resultFallbackTimer);
+            resultFallbackTimer = setTimeout(() => {
+              if (awaitingResult) { awaitingResult = false; renderResult(outcome); }
+            }, 6000);
+          }
         }
       }
     }
