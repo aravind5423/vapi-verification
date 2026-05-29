@@ -53,8 +53,37 @@ const OUTCOME_CONFIG = {
 const vapi = (PUBLIC_KEY && Vapi) ? new Vapi(PUBLIC_KEY) : null;
 let outcome = null;     // last set_outcome captured this call
 let inCall  = false;
+let connectTimer = null; // guards against a never-connecting call (hung spinner)
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
+// Pull a clean, speakable first name out of whatever the user typed. Handles
+// honorifics ("Mr.Ara" → "Ara"), ALL-CAPS (→ Title-case so the TTS says it as a
+// word instead of spelling it), initials, punctuation and stray whitespace.
+// Returns "" if there's no real (letter-containing) name.
+const HONORIFICS = new Set([
+  "mr","mrs","ms","miss","mx","dr","prof","professor","sir","madam","maam","rev","fr","hon",
+]);
+function normalizeFirstName(raw) {
+  const tokens = String(raw || "")
+    .replace(/[.,]/g, " ")     // split "Mr.Ara" and initials
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  let i = 0;
+  while (i < tokens.length && HONORIFICS.has(tokens[i].toLowerCase().replace(/[^a-z]/g, ""))) i++;
+  const rest = tokens.slice(i);
+  const hasLetter = (t) => /[a-zA-Z]/.test(t);
+  const longEnough = (t) => t.replace(/[^a-zA-Z'-]/g, "").length >= 2;
+  const pick =
+    rest.find((t) => hasLetter(t) && longEnough(t)) ||
+    rest.find(hasLetter) ||
+    tokens.find(hasLetter) ||   // fallback: even an honorific-only edge
+    "";
+  const clean = pick.replace(/[^a-zA-Z'-]/g, "");
+  if (!clean) return "";
+  return clean.charAt(0).toUpperCase() + clean.slice(1).toLowerCase();
+}
+
 function parseArgs(raw) {
   if (!raw) return {};
   if (typeof raw === "string") {
@@ -92,6 +121,7 @@ function showStartButtonLoading(loading) {
 function resetToIdle() {
   outcome = null;
   inCall = false;
+  clearTimeout(connectTimer);
   window.__clearBootError?.();
   showStartButtonLoading(false);
   app.dataset.state = "idle";
@@ -126,6 +156,7 @@ function renderResult(code) {
 // ─── Vapi event wiring ───────────────────────────────────────────────────────
 if (vapi) {
   vapi.on("call-start", () => {
+    clearTimeout(connectTimer);
     inCall = true;
     showStartButtonLoading(false);
     app.dataset.state = "calling";
@@ -133,6 +164,7 @@ if (vapi) {
   });
 
   vapi.on("call-end", () => {
+    clearTimeout(connectTimer);
     renderResult(outcome);
   });
 
@@ -172,6 +204,7 @@ if (vapi) {
 
   vapi.on("error", (e) => {
     console.error("[vapi] error", e);
+    clearTimeout(connectTimer);
     const detail = describeError(e);
     const low = detail.toLowerCase();
 
@@ -211,19 +244,15 @@ startForm.addEventListener("submit", async (e) => {
   }
 
   const fullName = nameInput.value.trim();
-  if (!fullName) {
+  // Derive a clean, speakable first name from whatever was typed (titles, caps, etc.).
+  const name = normalizeFirstName(fullName);
+  if (!name) {
     nameError.style.display = "block";
     nameInput.classList.add("error-input");
     return;
   }
   nameError.style.display = "none";
   nameInput.classList.remove("error-input");
-
-  // First name only, normalized to Title-case. An ALL-CAPS name like "NEELANSH"
-  // makes the TTS spell it letter-by-letter ("N-E-E-L-A-N-S-H"), so force a single
-  // leading capital with the rest lowercase before handing it to Freya.
-  const first = fullName.split(/\s+/)[0] || fullName;
-  const name = first.charAt(0).toUpperCase() + first.slice(1).toLowerCase();
 
   // Switch to the live call view in a fresh connecting state
   outcome = null;
@@ -233,10 +262,23 @@ startForm.addEventListener("submit", async (e) => {
   setStatus("🎙️", "pending", "Connecting…", "Allow microphone access to begin.", "");
   showStartButtonLoading(true);
 
+  // Guard against a call that never connects (keeps the spinner from hanging forever).
+  clearTimeout(connectTimer);
+  connectTimer = setTimeout(() => {
+    if (inCall) return;
+    try { vapi.stop(); } catch {}
+    outcomeBadge.className = "outcome-badge";
+    app.dataset.state = "result";
+    setStatus("⚠️", "error", "Couldn't Connect",
+      "The call didn't connect in time. Check your internet connection and try again.", "error");
+    showStartButtonLoading(false);
+  }, 20000);
+
   try {
     await vapi.start(ASSISTANT_ID, { variableValues: { name } });
   } catch (err) {
     console.error("[vapi] start failed", err);
+    clearTimeout(connectTimer);
     const detail = describeError(err);
     outcomeBadge.className = "outcome-badge";
     app.dataset.state = "result";
