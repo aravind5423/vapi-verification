@@ -3,7 +3,7 @@
 Guidance for working in this repo.
 
 ## What this is
-A **browser-based AI voice verification** app. A visitor enters their name, clicks Start, and has a live voice conversation with an AI agent ("Freya") **in the browser** via the Vapi Web SDK (`@vapi-ai/web`). Freya runs a short "pulse check" survey and records an outcome (`P1`–`P4`) that the page shows in real time. No phone calls, no Twilio — the call is WebRTC mic/speakers.
+A **browser-based AI voice verification** app. A visitor enters their name, clicks Start, and has a live voice conversation with an AI agent ("Freya") **in the browser** via the Vapi Web SDK (`@vapi-ai/web`). Freya runs a short "pulse check" survey and records an outcome (`P1`–`P6`) that the page shows in real time. No phone calls, no Twilio — the call is WebRTC mic/speakers.
 
 ## Architecture (read this first)
 - **Pure static SPA built with Vite.** There is **no backend / no `api/` functions / no database.** (The old phone-calling serverless backend was removed — see git history if curious.)
@@ -14,8 +14,9 @@ A **browser-based AI voice verification** app. A visitor enters their name, clic
 ```
 Browser SPA  ──>  new Vapi(VITE_VAPI_PUBLIC_KEY)
              ──>  vapi.start(VITE_VAPI_ASSISTANT_ID, { variableValues: { name } })
-             ──>  vapi.on('message')  → set_outcome → P1–P4 result card
-             ──>  vapi.on('volume-level' / 'call-end' / 'error') → UI
+             ──>  vapi.on('message')  → set_outcome (P1–P6) captured
+             ──>  vapi.on('speech-end') → reveal the result card (when Freya finishes the goodbye)
+             ──>  vapi.on('volume-level' / 'call-start' / 'call-end' / 'error') → UI/state
 ```
 
 ## Commands
@@ -51,10 +52,10 @@ The **private** key is used only by `scripts/configure-assistant.mjs` (never bun
 | `P6_UNCLEAR` | Reached someone but couldn't determine (garbled / language / ambiguous) | 🤔 muted |
 
 ## File map
-- `index.html` — Vite entry; markup for the form, voice orb, transcript, controls, result card. Also contains a small inline script that **shims `window.global`/`window.process`** (for Daily.co) and an **on-page error banner** (`window.__showBootError`).
-- `src/main.js` — all SDK logic: resolve the Vapi constructor (see gotchas), start by assistant ID, capture `set_outcome` from messages, volume-reactive orb, mute/end, mic & error handling. Passes the caller's **first name** as `{{name}}`.
-- `src/style.css` — styles.
-- `scripts/configure-assistant.mjs` — one-shot Vapi API setup of the assistant (prompt, `set_outcome` async tool, `clientMessages: tool-calls`, voice, endCallPhrases). The source of truth for the agent config in code form.
+- `index.html` — Vite entry. **Split-console layout** driven by `data-state` on `#app` (`idle`/`calling`/`result`): *idle* = two panes (hero + "how it works" steps | start-card form); *calling/result* = a single centered card (voice orb + status + Mute/End → outcome badge + retry). No live transcript (removed). Inline scripts **shim `window.global`/`window.process`** (for Daily.co) and provide the **on-page error banner** (`window.__showBootError` / `window.__clearBootError`).
+- `src/main.js` — all SDK logic: resolve the Vapi constructor (see gotchas); `normalizeFirstName()` cleans the typed name (strips titles like "Mr.Ara", Title-cases ALL-CAPS so TTS doesn't spell it); **pre-warms the mic** (getUserMedia) before `vapi.start`; ~20s **connect timeout**; captures `set_outcome` and reveals the result on the assistant's **`speech-end`** (so the UI doesn't flip before the goodbye finishes); volume-reactive orb (rAF-throttled); mute/end/retry; `data-state` machine; mic & error handling. Passes the **first name** as `{{name}}`.
+- `src/style.css` — styles (split-console grid, orb states, 6 outcome accents, responsive stack, reduced-motion).
+- `scripts/configure-assistant.mjs` — source of truth for the agent in code. PATCHes (or, with `VAPI_CREATE=1`, POSTs a new) assistant: system prompt (all conversation scenarios), `set_outcome` async tool (P1–P6) + `endCall` tool, `clientMessages: ["tool-calls","function-call"]`, voice (Cartesia `sonic-3.5` + `chunkPlan`, `backgroundSound:"off"`), `endCallPhrases`, silence handling (`messagePlan.idleMessages` + `silenceTimeoutSeconds`), speaking plans. Has a **model-candidate fallback loop** (prefers `gpt-5.2-chat-latest`) and a Cartesia-voice fallback if a choice is rejected at PATCH.
 - `vite.config.js` — defines `global: globalThis` for the SDK. `vercel.json` — pins `framework: vite`, build → `dist/`.
 - `.env.example`.
 
@@ -64,9 +65,15 @@ The **private** key is used only by `scripts/configure-assistant.mjs` (never bun
 ## Gotchas
 - **`@vapi-ai/web` is CommonJS** (`module.exports = { default: VapiClass }`). A plain `import Vapi from '@vapi-ai/web'` double-unwraps in the production bundle → `"X.default is not a constructor"`. `src/main.js` therefore imports the namespace and walks to the real constructor. **Don't revert to the default import.**
 - **Daily.co (under the SDK) needs Node globals.** `index.html` shims `window.global`/`window.process` and `vite.config.js` defines `global: globalThis`. Without these the call errors when it starts.
-- **`clientMessages` must include `tool-calls`** on the assistant, or the browser never receives the outcome (it'd default to `P4`).
+- **`clientMessages` must include `tool-calls`** on the assistant, or the browser never receives the outcome (the page then shows a neutral "Call Ended" with no P-code).
 - **`set_outcome` is async** (fire-and-forget) so the model doesn't block waiting for a server response that doesn't exist in this client-only setup.
+- **The result card renders on `speech-end`, not on `set_outcome`.** Capturing `set_outcome` only *stores* the outcome; `main.js` reveals it when Freya finishes the goodbye (`speech-end`), with a fallback timer + `call-end` as backstops. Rendering instantly on `set_outcome` made the UI flip before she stopped talking — don't do that.
+- **Never name-match the caller by ear.** Speech-to-text mangles names, so the prompt treats any "yes/speaking/this is me" as confirmed (P1) even if the spoken name differs from `{{name}}`; only an explicit denial → P5. (A past bug marked a confirmed person P5 because STT heard "Aravind" as "Taravan".)
+- **ALL-CAPS names get spelled out by TTS** ("N‑E‑E‑L…"). `main.js` `normalizeFirstName()` Title-cases the name before sending it; keep that.
 - **Two-mode call ending (don't merge them).** Scenarios with a spoken goodbye end via `endCallPhrases` (the agent says the line, which ends with a phrase like "have a good day", and Vapi hangs up *after* the utterance). The `endCall` **tool** is reserved for silent ends (voicemail/dead-air). Letting the model call the `endCall` tool right after a closing line **cuts off the final TTS** — that was the "voice glitches at the end" bug. The prompt in `configure-assistant.mjs` enforces this; keep it.
+- **Silence is handled by `messagePlan.idleMessages`** (a varied pool) — after ~7s of quiet Freya nudges ("you still there?") up to twice, then the call ends at `silenceTimeoutSeconds`. Pure silence never invokes the model, so it ends with **no `set_outcome`** → neutral "Call Ended" (expected).
+- **Audio smoothness vs. latency:** `voice.chunkPlan.minCharacters` at **40** keeps TTS smooth. Lowering it (e.g. 20) shaves start-latency but causes **stutter/gaps on marginal networks** — get snappiness from `startSpeakingPlan.waitSeconds` (0.2) instead, and leave chunkPlan at 40.
+- **Voice is Cartesia `sonic-3.5`** (ElevenLabs was tried and reverted — it needed provider wiring and caused deploy/env churn). The active assistant is **`28fe3455…`**; the deployed `VITE_VAPI_ASSISTANT_ID` must point at a valid assistant or every call 400s ("assistant does not exist").
 - **Mic needs a secure context** — works on `localhost` and HTTPS (Vercel), not plain HTTP. If a user denied the mic, the browser won't re-prompt; they must re-allow it in site settings and reload.
 - **Debugging a failed call (server vs browser):** `POST https://api.vapi.ai/call/web` with the **public** key + `{ assistantId }` should return **201** with a `webCallUrl`. If that works, your key/assistant are fine and the failure is browser-side (mic/WebRTC). The on-page error banner shows the exact runtime error.
 - The **public key lets anyone on the page start (paid) calls** — restrict allowed origins to your domain in the Vapi dashboard for production.
