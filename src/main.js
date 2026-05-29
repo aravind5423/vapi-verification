@@ -19,9 +19,7 @@ if (!Vapi && typeof window !== "undefined" && window.__showBootError) {
 // PUBLIC/non-secret (the public key is meant to live in the browser). For prod,
 // restrict the public key to your domain in the Vapi dashboard.
 const PUBLIC_KEY = import.meta.env.VITE_VAPI_PUBLIC_KEY || "1a840109-9d4c-484d-85e6-e4747c1588f4";
-// "Freya — Human" (ElevenLabs voice + casual register). To switch back to the
-// proven Cartesia voice, point this at the fallback "Freya": 28fe3455-e09e-4d09-bf74-6c7b0411a804
-const ASSISTANT_ID = import.meta.env.VITE_VAPI_ASSISTANT_ID || "93580ccf-f49e-4749-8397-56ce3dfc9097";
+const ASSISTANT_ID = import.meta.env.VITE_VAPI_ASSISTANT_ID || "28fe3455-e09e-4d09-bf74-6c7b0411a804";
 
 // ─── Element refs ────────────────────────────────────────────────────────────
 const startForm   = document.getElementById("startForm");
