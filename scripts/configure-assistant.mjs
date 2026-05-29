@@ -8,10 +8,10 @@
  *
  * Run it with YOUR private key kept in your own terminal (never committed):
  *
- *   PowerShell:
- *     $env:VAPI_PRIVATE_KEY="sk_xxx"; $env:VAPI_ASSISTANT_ID="<id>"; node scripts/configure-assistant.mjs
- *   bash:
+ *   Update an existing assistant (PATCH):
  *     VAPI_PRIVATE_KEY=sk_xxx VAPI_ASSISTANT_ID=<id> node scripts/configure-assistant.mjs
+ *   Create a brand-new assistant (POST) and print its id:
+ *     VAPI_PRIVATE_KEY=sk_xxx VAPI_CREATE=1 VAPI_ASSISTANT_NAME="Freya — Human" node scripts/configure-assistant.mjs
  *
  * Requires Node 18+ (global fetch). No dependencies.
  * ---------------------------------------------------------------------------
@@ -19,9 +19,11 @@
 
 const KEY = process.env.VAPI_PRIVATE_KEY;
 const ID = process.env.VAPI_ASSISTANT_ID;
+const CREATE = process.env.VAPI_CREATE === "1" || (!ID && !!process.env.VAPI_ASSISTANT_NAME);
+const NAME = process.env.VAPI_ASSISTANT_NAME || "Freya";
 
-if (!KEY || !ID) {
-  console.error("✗ Set VAPI_PRIVATE_KEY (your Vapi PRIVATE key) and VAPI_ASSISTANT_ID first.");
+if (!KEY || (!CREATE && !ID)) {
+  console.error("✗ Set VAPI_PRIVATE_KEY plus either VAPI_ASSISTANT_ID (update) or VAPI_CREATE=1 (create a new assistant).");
   process.exit(1);
 }
 
@@ -31,6 +33,14 @@ You are Freya, a friendly, everyday person calling business owners in America.
 You must always speak English.
 You sound 100% human. You speak casually, use contractions (I'm, you're, we'd), and occasionally use conversational fillers like "um", "ah", or "you know" naturally so you do not sound like a spam caller.
 Under NO circumstances should you apologize for being an AI or mention that you are an AI. If they ask if you are a robot or an AI, or if you are having trouble understanding them, just laugh it off gently and say that English is not your first language. Do not use overly formal, robotic language.
+
+SPEAKING STYLE — sound like a real human, not a script:
+- Talk casually and warmly, the way a regular American would on a quick call. ALWAYS use contractions and reductions: I'm, you're, gonna, wanna, kinda, gotta, lemme, 'cause.
+- Use natural slang and casual words where they fit: "yeah", "yep", "for sure", "totally", "honestly", "gotcha", "no worries", "awesome", "cool", "super quick", "real quick", "y'know", "oh nice", "my bad". Sprinkle them in naturally — don't cram them into every sentence.
+- Add light, OCCASIONAL disfluencies: a soft "um" or "uh", a small false start, a quick self-correction, a trailing "…". Keep it occasional — overdoing it sounds fake.
+- React like a person: a quick "oh, gotcha" or "ha, totally" before you move on.
+- Keep every turn SHORT and spontaneous — one or two sentences, like real phone talk. Vary your sentence length. Never sound scripted, formal, or like customer service.
+- EXCEPTION: say your closing line EXACTLY as written in the scenario, ending with "Have a good day." or "Have a great rest of your day!" — do not add slang, extra words, or anything after it.
 
 CORE DIRECTIVE & TURN-TAKING RULE
 You are a concise phone verification agent conducting a quick "pulse check" survey.
@@ -144,13 +154,22 @@ const config = {
     ],
   },
   voice: {
-    provider: "cartesia",
-    model: "sonic-3.5",
-    voiceId: "00a77add-48d5-4ef6-8157-71e5437b282d", // Cartesia "Callie" (confirmed working)
-    generationConfig: { speed: 1.0, volume: 1.2 },
-    experimentalControls: { emotion: ["curiosity:high", "sadness:low", "positivity:high"] },
+    // ElevenLabs = most human-sounding. eleven_turbo_v2_5 keeps latency low for live turn-taking.
+    // Lower stability + some style = livelier, more natural casual read. Tune voiceId by ear.
+    provider: "11labs",
+    model: "eleven_turbo_v2_5",
+    voiceId: "9BWtsMINqrJLrRacOk9x", // ElevenLabs "Aria" — casual American female
+    stability: 0.45,
+    similarityBoost: 0.75,
+    style: 0.4,
+    useSpeakerBoost: true,
+    optimizeStreamingLatency: 3,
+    speed: 1.0,
   },
   transcriber: { provider: "deepgram", model: "nova-3", language: "en" },
+  // Naturalness: backchannel ("mhmm/yeah") while the user talks. (Filler words are
+  // driven by the prompt's SPEAKING STYLE instead — no valid assistant-level toggle.)
+  backchannelingEnabled: true,
   firstMessage: "Hi, um, is this {{name}}?",
   firstMessageMode: "assistant-speaks-first",
   endCallFunctionEnabled: true,
@@ -163,7 +182,7 @@ const config = {
     backoffPlan: { maxRetries: 3, startAtSeconds: 1, frequencySeconds: 2.5 },
     beepMaxAwaitSeconds: 0,
   },
-  startSpeakingPlan: { waitSeconds: 0.4, smartEndpointingPlan: { provider: "vapi" } },
+  startSpeakingPlan: { waitSeconds: 0.3, smartEndpointingPlan: { provider: "vapi" } },
   stopSpeakingPlan: { numWords: 2, voiceSeconds: 0.3, backoffSeconds: 1 },
   // CRITICAL for web calls: deliver these events to the browser SDK. "tool-calls"
   // is how the page receives the set_outcome result.
@@ -184,17 +203,41 @@ const config = {
 // is laggy for turn-taking). chatgpt-4o-latest / gpt-4o are proven voice baselines.
 const MODEL_CANDIDATES = ["gpt-5.2-chat-latest", "gpt-5.2", "chatgpt-4o-latest", "gpt-4o"];
 
+// If Vapi rejects the ElevenLabs voice block (e.g. account isn't wired for 11labs),
+// swap to the known-good Cartesia voice so the rest of the config still applies.
+// NOTE: a missing 11labs key usually only fails at CALL time, not here — confirm by ear.
+const CARTESIA_VOICE_FALLBACK = {
+  provider: "cartesia",
+  model: "sonic-3",
+  voiceId: "00a77add-48d5-4ef6-8157-71e5437b282d", // Cartesia "Callie" (previously working)
+  generationConfig: { speed: 1.0, volume: 1.2 },
+};
+
 async function patch() {
+  let voiceFellBack = false;
+  const url = CREATE ? "https://api.vapi.ai/assistant" : `https://api.vapi.ai/assistant/${ID}`;
+  const method = CREATE ? "POST" : "PATCH";
+  if (CREATE) config.name = NAME;
+  const send = () => fetch(url, {
+    method,
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${KEY}` },
+    body: JSON.stringify(config),
+  });
   for (let i = 0; i < MODEL_CANDIDATES.length; i++) {
     const model = MODEL_CANDIDATES[i];
     config.model.model = model;
-    const res = await fetch(`https://api.vapi.ai/assistant/${ID}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${KEY}` },
-      body: JSON.stringify(config),
-    });
-    const text = await res.text();
-    if (res.ok) return { text, model };
+    let res = await send();
+    let text = await res.text();
+
+    // Voice rejected → fall back to Cartesia once, then retry this same model.
+    if (!res.ok && res.status === 400 && /voice|11labs|eleven/i.test(text) && !voiceFellBack) {
+      console.warn("• Vapi rejected the ElevenLabs voice — falling back to Cartesia Sonic…");
+      config.voice = CARTESIA_VOICE_FALLBACK;
+      voiceFellBack = true;
+      res = await send();
+      text = await res.text();
+    }
+    if (res.ok) return { text, model, voice: config.voice.provider };
 
     const last = i === MODEL_CANDIDATES.length - 1;
     // Only roll to the next candidate when the rejection is about the model id.
@@ -207,8 +250,11 @@ async function patch() {
   }
 }
 
-const { text, model } = await patch();
-let name = ID;
-try { name = JSON.parse(text).name ?? ID; } catch {}
-console.log(`✓ Assistant "${name}" configured for web calls (model "${model}", set_outcome P1–P6, tool-calls client message, endCallPhrases, voice, prompt).`);
+const { text, model, voice } = await patch();
+let parsed = {};
+try { parsed = JSON.parse(text); } catch {}
+const name = parsed.name ?? NAME;
+const newId = parsed.id ?? ID;
+console.log(`✓ Assistant "${name}" (${newId}) ${CREATE ? "CREATED" : "configured"} for web calls (model "${model}", voice "${voice}", set_outcome P1–P6, backchannel, endCallPhrases, prompt).`);
+if (CREATE) console.log(`  → New assistant id: ${newId}  (set VITE_VAPI_ASSISTANT_ID to this, or update src/main.js fallback)`);
 console.log("  Open the Vapi dashboard to confirm, then run the app.");

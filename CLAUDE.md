@@ -40,6 +40,8 @@ Both are **browser-safe** (public) and inlined by Vite **at build time**. They'r
 
 The **private** key is used only by `scripts/configure-assistant.mjs` (never bundled, never committed).
 
+**Two assistants (A/B):** the app defaults to **"Freya — Human"** `93580ccf-f49e-4749-8397-56ce3dfc9097` (ElevenLabs `eleven_turbo_v2_5` voice + casual register). A fallback **"Freya"** `28fe3455-e09e-4d09-bf74-6c7b0411a804` keeps the proven **Cartesia** voice — switch back by setting `VITE_VAPI_ASSISTANT_ID` to it (or editing the `src/main.js` fallback). `configure-assistant.mjs` updates an existing assistant (`VAPI_ASSISTANT_ID`) or creates a new one (`VAPI_CREATE=1 VAPI_ASSISTANT_NAME=…`), with model + voice fallbacks if Vapi rejects a choice.
+
 ## Outcome model
 | Code | Meaning | UI |
 |---|---|---|
