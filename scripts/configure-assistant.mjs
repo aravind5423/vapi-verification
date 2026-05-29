@@ -132,7 +132,7 @@ EXTRA NUANCES (handle within the scenario above that fits best):
 const config = {
   model: {
     provider: "openai",
-    model: "gpt-5.2-chat-latest", // set by the candidate loop below; Vapi validates server-side
+    model: "gpt-4o", // set by the candidate loop below; Vapi validates server-side
     messages: [{ role: "system", content: systemPrompt }],
     tools: [
       {
@@ -210,10 +210,11 @@ const config = {
 
 // Preferred model first; Vapi validates model IDs server-side, so if it rejects
 // the top choice we transparently fall back to the next known-good option.
-// "gpt-5.2-chat-latest" is the low-latency, non-reasoning "Instant" variant of
-// GPT-5.2 — the right pick for real-time voice (base "gpt-5.2" reasons first and
-// is laggy for turn-taking). chatgpt-4o-latest / gpt-4o are proven voice baselines.
-const MODEL_CANDIDATES = ["gpt-5.2-chat-latest", "gpt-5.2", "chatgpt-4o-latest", "gpt-4o"];
+// gpt-4o is the primary on purpose: it's the gold standard for RELIABLE native
+// tool-calling in Vapi (it doesn't "speak" set_outcome as text — the failure we
+// saw on gpt-5.2-chat-latest) and is fast/low-latency for real-time voice.
+// gpt-4.1 is the equally-reliable fallback; the chat-tuned snapshots come last.
+const MODEL_CANDIDATES = ["gpt-4o", "gpt-4.1", "chatgpt-4o-latest", "gpt-5.2-chat-latest"];
 
 async function patch() {
   for (let i = 0; i < MODEL_CANDIDATES.length; i++) {
