@@ -170,7 +170,10 @@ async function callDeepSeekOnce({ key, transcript, endedReason, durationSec, liv
       signal: ctrl.signal,
       body: JSON.stringify({
         model: DEEPSEEK_MODEL,
-        temperature: 0.3,
+        // temperature 0 = near-deterministic: the 3 samples almost always agree, so
+        // the majority vote reproduces across runs (no Call-#1-style P6↔P8 flip-flop).
+        // A residual non-majority still returns null → the deterministic heuristic floor.
+        temperature: 0.0,
         response_format: { type: "json_object" },
         messages: [
           { role: "system", content: systemPrompt() },
@@ -232,21 +235,27 @@ export async function classify({ transcript, endedReason, durationSec, liveOutco
   } catch {
     llm = null; // any unexpected failure → fall through to the floor
   }
-  if (llm) return { ...llm, source: "ensemble" };
+  if (llm) {
+    // IDENTITY-GATE INVARIANT (deterministic guard): P1 and P8 both mean "identity
+    // verified". That is impossible without an explicit confirmation somewhere in the
+    // caller's turns. If the model claims a verified outcome with no confirmation in
+    // the transcript, it's hallucinating verification (the same mistake the live agent
+    // makes on never-confirmed "I'm busy / call me later" callers) — downgrade to P6.
+    const verified = llm.code === "P1_SUCCESS" || llm.code === "P8_VERIFIED_NO_SURVEY";
+    if (verified && !hasConfirmation(userTurns(transcript))) {
+      return { code: "P6_UNCLEAR", confidence: llm.confidence, source: "ensemble-guard" };
+    }
+    return { ...llm, source: "ensemble" };
+  }
 
-  // Step 3 (reconcile, LLM unavailable / tied) — prefer the deterministic heuristic
-  // floor: it encodes our taxonomy rules, including the key correction that a
-  // confirmed-but-no-survey person is P8, NOT P1. The live `set_outcome` is the
-  // very layer we're backstopping (it's wrong ~25% of the time, e.g. it marks
-  // confirmed-but-busy as P1), so it must NOT override the floor here. We only fall
-  // back to the live hint when the floor itself can't tell (P6_UNCLEAR) — a hint
-  // beats "unclear".
+  // Step 3 (reconcile, LLM unavailable / tied) — fall to the deterministic heuristic
+  // floor, period. The live `set_outcome` is the unreliable layer we're backstopping
+  // (wrong ~half the time — it marks confirmed-but-busy as P1 and leaks a false P8 on
+  // never-confirmed callers), so it is NEVER a tiebreaker here. It stays ONLY an input
+  // to the LLM prompt (a hint the model is told to distrust). The floor always returns
+  // a valid code, so the same transcript always classifies the same way — no run-to-run
+  // flip-flop (e.g. a never-confirmed evasive caller is deterministically P6_UNCLEAR,
+  // never the agent's wrong P8).
   const floor = heuristicFromText(transcript, endedReason);
-  if (floor !== "P6_UNCLEAR") {
-    return { code: floor, confidence: 0.55, source: "heuristic" };
-  }
-  if (isValidOutcome(liveOutcome)) {
-    return { code: liveOutcome, confidence: 0.5, source: "live-hint" };
-  }
-  return { code: floor, confidence: 0.5, source: "heuristic" };
+  return { code: floor, confidence: 0.55, source: "heuristic" };
 }

@@ -47,8 +47,6 @@ let currentCallId = null; // Vapi call id — used to fetch the result server-si
 let inCall  = false;
 let connecting = false; // submitted, mic/connect in flight — guards double-submit
 let connectTimer = null; // guards against a never-connecting call (hung spinner)
-let awaitingResult = false;   // outcome captured; waiting for Freya to finish the goodbye
-let resultFallbackTimer = null;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 // (normalizeFirstName / parseArgs / describeError live in ./utils.js so they're
@@ -74,9 +72,7 @@ function resetToIdle() {
   outcome = null;
   currentCallId = null;
   inCall = false;
-  awaitingResult = false;
   clearTimeout(connectTimer);
-  clearTimeout(resultFallbackTimer);
   window.__clearBootError?.();
   showStartButtonLoading(false);
   app.dataset.state = "idle";
@@ -103,57 +99,46 @@ function renderResult(code) {
   } else {
     const cfg = OUTCOME_CONFIG[code] || OUTCOME_CONFIG.P6_UNCLEAR;
     setStatus(cfg.icon, cfg.cardState, cfg.title, cfg.msg, cfg.cardState);
-    outcomeBadge.textContent = cfg.label;
+    // The user only ever sees plain words (cfg.badge); the internal P-code stays in a
+    // data attribute + the console for debugging, never on screen.
+    outcomeBadge.textContent = cfg.badge;
+    outcomeBadge.dataset.code = code;
     outcomeBadge.className = `outcome-badge show ${cfg.cls}`;
+    console.info("[outcome]", code, `(${cfg.badge})`);
   }
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// Called at call-end. The server `/api/outcome` classifier is the SOURCE OF TRUTH:
-// it both recovers a missed outcome AND corrects a wrong live one (e.g. the in-call
-// model marks a confirmed-but-busy person P1, but the server returns P8). So we now
-// ALWAYS reconcile against the server — keeping the live result for instant UX while
-// it confirms in the background.
+// Called at call-end. The server `/api/outcome` classifier is the SINGLE SOURCE OF
+// TRUTH. We do NOT show the live in-call outcome (it's wrong ~half the time, which is
+// what caused the result to visibly "flip"). Instead: show one brief "Wrapping up…"
+// state, fetch the authoritative result, and render it ONCE. The live capture is kept
+// only as a graceful-degradation fallback if the server can't be reached.
 async function finalizeResult() {
-  if (!currentCallId) {
-    // No call id to look up — fall back to whatever the live tool gave us (or neutral).
-    renderResult(outcome);
-    return;
-  }
+  // One clean interim state — never the (often wrong) live outcome.
+  inCall = false;
+  showStartButtonLoading(false);
+  app.dataset.state = "result";
+  app.dataset.tone = "";
+  outcomeBadge.className = "outcome-badge";
+  setStatus("⏳", "pending", "Wrapping up…", "Just a moment while we confirm the result.", "");
 
-  if (outcome) {
-    // Instant UX: show the live result now (speech-end usually already did) while
-    // the server confirms it in the background. No jarring "Finalizing…" flash.
-    renderResult(outcome);
-  } else {
-    // No live outcome — show an interim state while the server classifies.
-    inCall = false;
-    showStartButtonLoading(false);
-    app.dataset.state = "result";
-    app.dataset.tone = "";
-    outcomeBadge.className = "outcome-badge";
-    setStatus("⏳", "pending", "Finalizing…", "Just a moment while we confirm the result.", "");
-  }
-
-  const resolved = await pollServerOutcome(currentCallId);
-  if (resolved) {
-    // Server is authoritative — silently correct the card if it differs.
-    renderResult(resolved);
-  } else if (!outcome) {
-    // Nothing live and the server couldn't classify (or no backend) → neutral.
-    renderResult(null);
-  }
-  // else: server returned nothing but we already showed the live outcome — keep it.
+  const resolved = currentCallId ? await pollServerOutcome(currentCallId) : null;
+  if (resolved)     renderResult(resolved);   // the ONE authoritative outcome
+  else if (outcome) renderResult(outcome);    // server unreachable → fall back to live capture
+  else              renderResult(null);        // nothing at all → neutral "Call Ended"
 }
 
 // Poll the serverless classifier until it returns an outcome, says it can't, or we
-// give up. Bails immediately if there's no backend (plain `vite dev` → 404).
-async function pollServerOutcome(callId, attempts = 8, delayMs = 3000) {
+// give up. Bounded to ~10s so the "Wrapping up…" state can't hang; bails fast on a
+// hard backend error (404 = no backend, 5xx = e.g. missing VAPI_PRIVATE_KEY).
+async function pollServerOutcome(callId, attempts = 5, delayMs = 2500) {
   for (let i = 0; i < attempts; i++) {
     try {
       const r = await fetch(`/api/outcome?callId=${encodeURIComponent(callId)}`);
       if (r.status === 404) return null;        // no backend deployed — don't hang the UI
+      if (r.status >= 500) return null;         // server misconfigured (e.g. no private key) — bail fast
       if (r.ok) {
         const data = await r.json();
         if (data?.outcome) return data.outcome;
@@ -171,8 +156,6 @@ async function pollServerOutcome(callId, attempts = 8, delayMs = 3000) {
 if (vapi) {
   vapi.on("call-start", () => {
     clearTimeout(connectTimer);
-    clearTimeout(resultFallbackTimer);
-    awaitingResult = false;
     inCall = true;
     showStartButtonLoading(false);
     app.dataset.state = "calling";
@@ -181,20 +164,7 @@ if (vapi) {
 
   vapi.on("call-end", () => {
     clearTimeout(connectTimer);
-    clearTimeout(resultFallbackTimer);
-    awaitingResult = false;
     finalizeResult();
-  });
-
-  // Freya finished a spoken turn. If the outcome is already recorded, this is the
-  // end of her closing line — reveal the result NOW (right as she stops), so the
-  // UI never updates before she's done talking.
-  vapi.on("speech-end", () => {
-    if (awaitingResult) {
-      awaitingResult = false;
-      clearTimeout(resultFallbackTimer);
-      renderResult(outcome);
-    }
   });
 
   // Make the orb pulse with Freya's voice while she speaks. volume-level fires
@@ -232,17 +202,10 @@ if (vapi) {
         const args = parseArgs(c?.function?.arguments ?? c?.arguments ?? c?.parameters);
         const code = args?.outcome;
         if (typeof code !== "string" || !code.trim()) continue;
+        // Capture the live outcome ONLY as a degradation fallback — it is never
+        // rendered as the result. The authoritative result comes from /api/outcome
+        // after the call ends (see finalizeResult), so the card never flips.
         outcome = code.trim();
-        // Don't flip the UI yet — wait for Freya to FINISH the closing line
-        // (the "speech-end" below) so the result never appears before she's
-        // done talking. Fallback timer + call-end cover the rare no-speech case.
-        if (inCall) {
-          awaitingResult = true;
-          clearTimeout(resultFallbackTimer);
-          resultFallbackTimer = setTimeout(() => {
-            if (awaitingResult) { awaitingResult = false; renderResult(outcome); }
-          }, 6000);
-        }
       }
     } catch (err) {
       console.error("[vapi] failed to handle message", err);

@@ -110,18 +110,33 @@ describe("classify() orchestration (offline — no API key → heuristic/determi
     });
     expect(r.code).toBe("P8_VERIFIED_NO_SURVEY");
     // source is 'heuristic' without a key, or 'ensemble' if a key happens to be set.
-    expect(["heuristic", "ensemble", "live-hint"]).toContain(r.source);
+    // 'live-hint' must NOT appear — it was removed (the live outcome is never a tiebreaker).
+    expect(["heuristic", "ensemble"]).toContain(r.source);
     expect(OUTCOME_CODES).toContain(r.code);
   });
 
-  it("uses a valid live outcome as the tiebreaker when no LLM and not terminal", async () => {
-    // garbled transcript → heuristic would say P6, but a live hint should win as tiebreaker
-    // ONLY when there's no key (so classifyWithLLM returns null). We assert it returns a valid code.
+  it("NEVER leaks a wrong live outcome on a tie / no-LLM (Call #1 regression)", async () => {
+    // A never-confirmed, evasive caller. The live agent wrongly recorded P8 (which
+    // falsely implies identity was verified). With no key the LLM is skipped, so this
+    // exercises the floor: it must return P6_UNCLEAR and IGNORE the live P8 hint.
     const r = await classify({
-      transcript: T("AI: is this Sam?", "User: mmhmm uh"),
+      transcript: T("AI: is this Aravind?", "User: who is this?", "AI: a quick survey, am I speaking with Aravind?", "User: how'd you get my number?", "AI: public listing — is this Aravind?", "User: i'm busy"),
       endedReason: "assistant-said-end-call-phrase",
-      liveOutcome: "P1_SUCCESS",
+      liveOutcome: "P8_VERIFIED_NO_SURVEY",
     });
-    expect(isValidOutcome(r.code)).toBe(true);
+    expect(r.code).toBe("P6_UNCLEAR");
+    expect(r.source).toBe("heuristic");
+  });
+
+  it("is deterministic — same input classifies identically across runs", async () => {
+    const input = {
+      transcript: T("AI: is this Sam?", "User: who's calling?", "User: i'm busy"),
+      endedReason: "assistant-said-end-call-phrase",
+      liveOutcome: "P8_VERIFIED_NO_SURVEY",
+    };
+    const codes = [];
+    for (let i = 0; i < 5; i++) codes.push((await classify(input)).code);
+    expect(new Set(codes).size).toBe(1);
+    expect(isValidOutcome(codes[0])).toBe(true);
   });
 });
