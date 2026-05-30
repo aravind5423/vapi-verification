@@ -3,15 +3,10 @@
 // isolation (see utils.test.js) — importing main.js would touch the DOM at load.
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Outcome → display config. The 6 P-codes the assistant's set_outcome tool emits.
-export const OUTCOME_CONFIG = {
-  P1_SUCCESS:     { label: "P1 · Confirmed",       cls: "P1", icon: "✅", cardState: "success",   title: "Verification Successful", msg: "You confirmed your identity — thanks!" },
-  P2_VOICEMAIL:   { label: "P2 · Voicemail",       cls: "P2", icon: "📬", cardState: "voicemail", title: "Reached Voicemail",       msg: "A voicemail or answering machine picked up." },
-  P3_UNREACHABLE: { label: "P3 · No Answer",       cls: "P3", icon: "📵", cardState: "error",     title: "Couldn't Connect",        msg: "The call couldn't be completed." },
-  P4_DECLINED:    { label: "P4 · Not Interested",  cls: "P4", icon: "🚫", cardState: "warning",   title: "Declined",                msg: "We reached the person, but they weren't interested." },
-  P5_WRONG_PERSON:{ label: "P5 · Wrong Person",    cls: "P5", icon: "🙅", cardState: "neutral",   title: "Not the Right Person",    msg: "We reached someone, but not the person we were verifying." },
-  P6_UNCLEAR:     { label: "P6 · Unclear",         cls: "P6", icon: "🤔", cardState: "muted",     title: "Couldn't Tell",           msg: "We reached someone, but couldn't confirm the outcome." },
-};
+// The outcome taxonomy lives in ./outcomes.js (the single source of truth shared
+// with the server + the config script). Re-exported here so existing importers
+// (main.js, utils.test.js) keep working unchanged.
+export { OUTCOME_CONFIG, OUTCOME_CODES, OUTCOME_SET, isValidOutcome } from "./outcomes.js";
 
 // Honorifics stripped from the front of a typed name before picking the first name.
 export const HONORIFICS = new Set([

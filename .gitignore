@@ -20,3 +20,7 @@ Thumbs.db
 *.log
 ngrok_out.txt
 ngrok_err.txt
+
+# Dumped real-call fixtures (raw transcripts) — local classifier regression data.
+# The asserted corpus lives in test/fixtures/synthetic.json (committed).
+test/fixtures/calls/

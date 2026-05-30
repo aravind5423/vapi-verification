@@ -1,19 +1,17 @@
-// Vercel serverless function — server-side outcome resolver (the safety net's
-// delivery path to the browser).
+// Vercel serverless function — the AUTHORITATIVE server-side outcome resolver.
 //
-// The live UI normally gets the result from the in-call `set_outcome` tool. On
-// the rare occasion the model skips it, the page calls this endpoint with the
-// call id; we read Vapi's AUTHORITATIVE result server-side and return just the
-// P-code. Two sources, in order of trust:
-//   1) an explicit set_outcome tool call in the call's message log
-//   2) the post-call transcript analysis (analysisPlan.structuredDataPlan)
+// The browser shows the live in-call `set_outcome` instantly for UX, but that tool
+// is probabilistic (dropped ~25% of the time) and sometimes semantically wrong
+// (e.g. it marks a confirmed-but-busy person as P1_SUCCESS). This endpoint is the
+// source of truth: given a callId, it fetches the call from Vapi and runs OUR OWN
+// classifier (api/classify.js) over the always-available transcript + endedReason,
+// returning the correct P-code. The client reconciles its card to this result.
 //
-// The Vapi PRIVATE key lives in a server env var here (never bundled to the
-// client). This endpoint only ever returns a P-code — no transcript, no PII.
+// The Vapi PRIVATE key lives in a server env var here (never bundled to the client).
+// This endpoint only ever returns a P-code + metadata — no transcript, no PII.
 
-const OUTCOME_ENUM = new Set([
-  "P1_SUCCESS", "P2_VOICEMAIL", "P3_UNREACHABLE", "P4_DECLINED", "P5_WRONG_PERSON", "P6_UNCLEAR",
-]);
+import { classify, heuristicEndReason } from "./classify.js";
+import { isValidOutcome } from "../src/outcomes.js";
 
 export default async function handler(req, res) {
   const key = process.env.VAPI_PRIVATE_KEY;
@@ -53,24 +51,57 @@ export default async function handler(req, res) {
     return res.status(502).json({ error: "Bad response from Vapi." });
   }
 
-  // 1) Most trustworthy: an explicit set_outcome tool call from the transcript.
-  const fromTool = extractFromMessages(call?.messages);
-  if (fromTool) return res.status(200).json({ outcome: fromTool, source: "tool" });
+  const ended = call?.status === "ended" || Boolean(call?.endedAt);
+  const transcript = typeof call?.transcript === "string" ? call.transcript : "";
+  const endedReason = call?.endedReason || "";
 
-  // 2) Fallback: the server-side transcript analysis.
-  const fromAnalysis = call?.analysis?.structuredData?.outcome;
-  if (typeof fromAnalysis === "string" && OUTCOME_ENUM.has(fromAnalysis)) {
-    return res.status(200).json({ outcome: fromAnalysis, source: "analysis" });
+  // PENDING — tell the client to poll again:
+  //  • the call hasn't ended yet, OR
+  //  • it ended but the transcript hasn't been populated by Vapi yet AND the end
+  //    reason isn't one we can classify without a transcript (silence/voicemail).
+  //    This grace window stops a talkative call from being momentarily misread as
+  //    "unreachable" before its transcript lands (it populates within a few sec).
+  const terminalWithoutTranscript = Boolean(heuristicEndReason(endedReason, transcript));
+  if (!ended || (!transcript.trim() && !terminalWithoutTranscript)) {
+    return res.status(200).json({ outcome: null, pending: true });
   }
 
-  // 3) Nothing yet. Tell the client whether it's worth polling again: if the call
-  //    has ended but the analysis hasn't produced structuredData, it's still
-  //    being generated → pending. Otherwise we genuinely can't classify it.
-  const ended = call?.status === "ended" || Boolean(call?.endedAt);
-  const analysisDone = call?.analysis && Object.prototype.hasOwnProperty.call(call.analysis, "structuredData");
-  return res.status(200).json({ outcome: null, pending: !ended || !analysisDone });
+  // The live in-call set_outcome (if any) is passed to the classifier as a weak
+  // hint / tiebreaker — never as the answer on its own.
+  const liveOutcome = extractFromMessages(call?.messages);
+
+  const durationSec =
+    call?.startedAt && call?.endedAt
+      ? (new Date(call.endedAt) - new Date(call.startedAt)) / 1000
+      : undefined;
+
+  let result;
+  try {
+    result = await classify({
+      transcript,
+      endedReason,
+      durationSec,
+      liveOutcome,
+      messages: call?.messages,
+    });
+  } catch {
+    return res.status(502).json({ error: "Classification failed." });
+  }
+
+  // classify() always returns a valid code for an ended call, but guard anyway.
+  if (!result || !isValidOutcome(result.code)) {
+    return res.status(200).json({ outcome: null, pending: false });
+  }
+
+  return res.status(200).json({
+    outcome: result.code,
+    source: result.source,
+    confidence: result.confidence,
+  });
 }
 
+// Pull any explicit set_outcome the in-call model emitted, from the call's message
+// log. Used only as a hint to the classifier (and surfaced for debugging).
 function extractFromMessages(messages) {
   if (!Array.isArray(messages)) return null;
   for (const m of messages) {
@@ -82,7 +113,7 @@ function extractFromMessages(messages) {
       const rawArgs = t?.function?.arguments ?? t?.arguments;
       const args = typeof rawArgs === "string" ? safeParse(rawArgs) : rawArgs;
       const o = args?.outcome;
-      if (typeof o === "string" && OUTCOME_ENUM.has(o)) return o;
+      if (isValidOutcome(o)) return o;
     }
   }
   return null;

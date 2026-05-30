@@ -172,6 +172,8 @@ body {
 .outcome-badge.P4 { background: rgba(245,158,11,0.15); color: #fbbf24; border: 1px solid rgba(245,158,11,0.3); }
 .outcome-badge.P5 { background: rgba(148,163,184,0.15);color: #cbd5e1; border: 1px solid rgba(148,163,184,0.3); }
 .outcome-badge.P6 { background: rgba(107,114,128,0.18);color: #d1d5db; border: 1px solid rgba(107,114,128,0.35); }
+.outcome-badge.P7 { background: rgba(107,114,128,0.18);color: #d1d5db; border: 1px solid rgba(107,114,128,0.35); }
+.outcome-badge.P8 { background: rgba(56,189,248,0.15); color: #7dd3fc; border: 1px solid rgba(56,189,248,0.3); }
 
 .call-controls { gap: 10px; margin-top: 26px; width: 100%; max-width: 320px; }
 .ctrl-btn {

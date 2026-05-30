@@ -17,6 +17,8 @@
  * ---------------------------------------------------------------------------
  */
 
+import { OUTCOME_CODES } from "../src/outcomes.js";
+
 const KEY = process.env.VAPI_PRIVATE_KEY;
 const ID = process.env.VAPI_ASSISTANT_ID;
 
@@ -93,7 +95,7 @@ SCENARIO D — The right person (or likely them) refuses, is hostile, not intere
 
 SCENARIO E — Bad time ("I'm driving" / "I'm busy" / "I'm with a customer"):
   - If they say "go ahead" / "it's fine", ask the SCENARIO A question instead.
-  - Otherwise pick the outcome: "P1_SUCCESS" if they ALREADY confirmed they're {{name}}; "P5_WRONG_PERSON" if it's clearly the wrong person; "P4_DECLINED" if they're brushing you off / not interested; otherwise "P6_UNCLEAR".
+  - Otherwise pick the outcome: "P8_VERIFIED_NO_SURVEY" if they ALREADY confirmed they're {{name}} but won't answer the survey (busy/quiet/brush-off — identity is verified, but the survey isn't done); "P5_WRONG_PERSON" if it's clearly the wrong person; "P4_DECLINED" if they're brushing you off / not interested before confirming; otherwise "P6_UNCLEAR".
   - Then SPOKEN ENDING: "Oh, no worries — I'll let you go. Have a good day!"
 
 SCENARIO H — You genuinely cannot tell what's going on: the line is garbled, they keep replying in another language, or the answer stays ambiguous AFTER your one allowed repeat:
@@ -111,8 +113,8 @@ EXTRA NUANCES (handle within the scenario above that fits best):
 - "What? / huh? / sorry, say that again?" → repeat your last line ONCE, naturally; then continue. If it's STILL unclear after that one repeat → SCENARIO H (P6_UNCLEAR).
 - The phone is handed to a different person mid-call → re-confirm identity with the SCENARIO B question before continuing.
 - They answer the sentiment question vaguely or sarcastically → that still counts as a reply; go to SCENARIO A step 3 (P1_SUCCESS).
-- They confirmed they ARE {{name}} but then go quiet or won't answer the survey question (even after a gentle nudge) → you've already verified them, so set_outcome="P1_SUCCESS" and close warmly with the SCENARIO A closing line.
-- "Call me later / can you call back / now's not a good time" → treat as SCENARIO E: P1_SUCCESS if they already confirmed they're {{name}}, otherwise P4_DECLINED; close politely.
+- They confirmed they ARE {{name}} but then go quiet or won't answer the survey question (even after a gentle nudge) → you've verified their identity but NOT completed the survey, so set_outcome="P8_VERIFIED_NO_SURVEY" (NOT P1_SUCCESS — P1 is only when they actually answer the survey) and close warmly with the SCENARIO A closing line.
+- "Call me later / can you call back / now's not a good time" → treat as SCENARIO E: P8_VERIFIED_NO_SURVEY if they already confirmed they're {{name}} (verified, survey not done), otherwise P4_DECLINED; close politely.
 - They get rude, hostile, or use profanity → never argue or match it; go to SCENARIO D (P4_DECLINED) and use the polite closing.
 - They push back on your pronunciation of their name, or ask where you got their number/name → briefly, warmly reassure ("oh, just from a public business listing — nothing personal!") and continue; don't get stuck on it.
 - They suspect a scam or a sales pitch, or sound uneasy ("is this a scam", "sounds like a scam", "are you selling something", "this feels off") → do NOT treat this as a decline and do NOT hang up. Reassure ONCE, warmly: "Oh, no — nothing like that, I promise. I'm honestly not selling anything, it's just one quick anonymous question." Then re-ask your last question (the identity question, or the survey question if they've already confirmed) and WAIT. Only if they THEN refuse, get hostile, or clearly want out → SCENARIO D (set_outcome="P4_DECLINED").
@@ -136,6 +138,10 @@ const config = {
     // then speak the closing line" rule. At the default (~0.7+) it occasionally
     // improvises a goodbye and skips the tool call → call ends with no outcome.
     temperature: 0.3,
+    // Cap replies so the model can't ramble into a long monologue — long completions
+    // correlate with it "speaking" the set_outcome call instead of emitting the tool
+    // call. 150 is ample for the survey question + any closing line, but stops drift.
+    maxTokens: 150,
     messages: [{ role: "system", content: systemPrompt }],
     tools: [
       {
@@ -152,9 +158,9 @@ const config = {
             properties: {
               outcome: {
                 type: "string",
-                enum: ["P1_SUCCESS", "P2_VOICEMAIL", "P3_UNREACHABLE", "P4_DECLINED", "P5_WRONG_PERSON", "P6_UNCLEAR"],
+                enum: OUTCOME_CODES,
                 description:
-                  "P1_SUCCESS=confirmed the right person; P2_VOICEMAIL=voicemail/answering machine; P3_UNREACHABLE=no connection or dead air; P4_DECLINED=reached the person but they declined / aren't interested / hostile / asked not to be called; P5_WRONG_PERSON=reached someone but it's the wrong person or the target is unavailable (someone else answered, wrong number, 'not here'); P6_UNCLEAR=reached someone but genuinely couldn't determine the outcome (garbled line, language barrier, ambiguous after a repeat)",
+                  "P1_SUCCESS=confirmed the right person AND they answered the survey; P2_VOICEMAIL=voicemail/answering machine; P3_UNREACHABLE=no connection or dead air; P4_DECLINED=reached the person but they declined / aren't interested / hostile / asked not to be called; P5_WRONG_PERSON=reached someone but it's the wrong person or the target is unavailable (someone else answered, wrong number, 'not here'); P6_UNCLEAR=reached someone but genuinely couldn't determine the outcome (garbled line, language barrier, ambiguous after a repeat); P7_HUNGUP_EARLY=customer hung up before confirming identity (rarely set by you — usually assigned server-side); P8_VERIFIED_NO_SURVEY=identity confirmed but the survey was NOT completed (they were busy / went quiet / brushed off the question after confirming)",
               },
             },
             required: ["outcome"],
@@ -205,41 +211,33 @@ const config = {
   },
   startSpeakingPlan: { waitSeconds: 0.2, smartEndpointingPlan: { provider: "vapi" } },
   stopSpeakingPlan: { numWords: 2, voiceSeconds: 0.3, backoffSeconds: 1 },
-  // SAFETY NET: classify EVERY call from its transcript after it ends, so the
-  // outcome is never truly lost even if the model skips the set_outcome tool.
-  // Stored at call.analysis.structuredData.outcome — visible in the dashboard and
-  // via scripts/diagnose-last-call.mjs. (Runs server-side post-call; it does not
-  // reach the live browser UI, which still relies on the in-call set_outcome.)
+  // DEFENSE-IN-DEPTH backstop: have Vapi classify EVERY call from its transcript
+  // after it ends, stored at call.analysis.structuredData.outcome. This is now only
+  // a THIRD line of defense — the authoritative classifier is api/classify.js (which
+  // we own and which always runs). We deliberately keep this SCHEMA-ONLY: supplying
+  // a custom `messages` array made Vapi SILENTLY SKIP the plan (no structuredData,
+  // no cost line item — confirmed via costBreakdown; a known Vapi issue). The
+  // default extraction prompt + schema is the variant that actually runs (same as
+  // the summary/successEvaluation plans). The schema enum is sourced from the shared
+  // taxonomy so it can never drift. Verify it populates via diagnose-last-call.mjs.
   analysisPlan: {
     structuredDataPlan: {
       enabled: true,
-      // Default is 5s — too short for a gpt-4o extraction, which silently leaves
-      // structuredData empty. Give it room so the backstop actually completes.
       timeoutSeconds: 30,
       schema: {
         type: "object",
+        description:
+          "The single outcome code that best describes how this completed identity-verification + survey call went.",
         properties: {
           outcome: {
             type: "string",
-            enum: ["P1_SUCCESS", "P2_VOICEMAIL", "P3_UNREACHABLE", "P4_DECLINED", "P5_WRONG_PERSON", "P6_UNCLEAR"],
+            enum: OUTCOME_CODES,
+            description:
+              "P1_SUCCESS=confirmed the right person AND they answered the survey; P2_VOICEMAIL=voicemail/machine; P3_UNREACHABLE=no connection/dead air/only silence; P4_DECLINED=reached them but they declined/hostile/not interested; P5_WRONG_PERSON=wrong person or target unavailable; P6_UNCLEAR=reached someone but undeterminable (garbled/language/ambiguous); P7_HUNGUP_EARLY=customer hung up before confirming identity; P8_VERIFIED_NO_SURVEY=identity confirmed but survey not completed (busy/quiet).",
           },
         },
         required: ["outcome"],
       },
-      messages: [
-        {
-          role: "system",
-          content:
-            "You are classifying a completed phone verification call. From the transcript, choose EXACTLY one outcome code: " +
-            "P1_SUCCESS = confirmed the right person and they engaged at all; " +
-            "P2_VOICEMAIL = a voicemail or answering machine picked up; " +
-            "P3_UNREACHABLE = no connection, dead air, or only silence; " +
-            "P4_DECLINED = reached the person (or likely them) but they declined, weren't interested, were hostile, or asked not to be called; " +
-            "P5_WRONG_PERSON = reached someone but it's the wrong person/number or the target is unavailable; " +
-            "P6_UNCLEAR = reached someone but the outcome genuinely couldn't be determined (garbled, language barrier, ambiguous). " +
-            "Base your answer only on what actually happened in this transcript:\n\n{{transcript}}",
-        },
-      ],
     },
   },
   // CRITICAL for web calls: deliver these events to the browser SDK. "tool-calls"
@@ -303,5 +301,5 @@ async function patch() {
 const { text, model } = await patch();
 let name = ID;
 try { name = JSON.parse(text).name ?? ID; } catch {}
-console.log(`✓ Assistant "${name}" configured for web calls (model "${model}", set_outcome P1–P6, tool-calls client message, endCallPhrases, voice, prompt).`);
+console.log(`✓ Assistant "${name}" configured for web calls (model "${model}", set_outcome P1–P8, tool-calls client message, endCallPhrases, voice, prompt).`);
 console.log("  Open the Vapi dashboard to confirm, then run the app.");

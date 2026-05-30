@@ -13,6 +13,7 @@
  * ---------------------------------------------------------------------------
  */
 import { readFileSync } from "node:fs";
+import { classify } from "../api/classify.js";
 
 function envFromLocal(name) {
   if (process.env[name]) return process.env[name];
@@ -27,6 +28,12 @@ function envFromLocal(name) {
 
 const KEY = envFromLocal("VAPI_PRIVATE_KEY");
 const ASSISTANT_ID = envFromLocal("VITE_VAPI_ASSISTANT_ID") || envFromLocal("VAPI_ASSISTANT_ID");
+// Make the classifier's DeepSeek key available (if set) so the printed verdict
+// uses the full ensemble; without it, the verdict comes from the heuristic floor.
+if (!process.env.DEEPSEEK_API_KEY) {
+  const dk = envFromLocal("DEEPSEEK_API_KEY");
+  if (dk) process.env.DEEPSEEK_API_KEY = dk;
+}
 // Validate the CLI arg: a non-numeric / <=0 / huge value falls back to a sane 3,
 // clamped to 100 (Vapi's max page size) so we never send "NaN" or an absurd limit.
 const argN = Number(process.argv[2]);
@@ -71,7 +78,7 @@ if (!Array.isArray(calls) || calls.length === 0) {
 
 const fmt = (v) => (v == null ? "—" : typeof v === "string" ? v : JSON.stringify(v));
 
-calls.forEach((c, i) => {
+for (const [i, c] of calls.entries()) {
   console.log("\n" + "═".repeat(76));
   console.log(`CALL #${i + 1}  id=${c.id}`);
   console.log(`  type:          ${fmt(c.type)}`);
@@ -116,6 +123,17 @@ calls.forEach((c, i) => {
       ? c.transcript.split(/\r?\n/).map((l) => "    " + l).join("\n")
       : "    (no transcript)"
   );
-});
+
+  // What our authoritative classifier (api/classify.js) would decide for this call.
+  const liveOutcome = toolCalls.find((t) => t.name === "set_outcome")?.args;
+  const live = typeof liveOutcome === "string" ? (() => { try { return JSON.parse(liveOutcome)?.outcome; } catch { return liveOutcome; } })() : liveOutcome?.outcome;
+  const durationSec = c.startedAt && c.endedAt ? (new Date(c.endedAt) - new Date(c.startedAt)) / 1000 : undefined;
+  try {
+    const verdict = await classify({ transcript: c.transcript, endedReason: c.endedReason, durationSec, liveOutcome: live });
+    console.log(`  ▶ CLASSIFIER:  ${verdict.code}  (source=${verdict.source}, confidence=${verdict.confidence})${live && live !== verdict.code ? `  [live set_outcome was ${live}]` : ""}`);
+  } catch (err) {
+    console.log(`  ▶ CLASSIFIER:  (failed: ${err?.message || err})`);
+  }
+}
 
 console.log("\n" + "═".repeat(76));

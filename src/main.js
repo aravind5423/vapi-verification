@@ -110,38 +110,54 @@ function renderResult(code) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// Called at call-end. If the in-call set_outcome was captured, render it. If it
-// wasn't (the model occasionally skips the tool), ask the server for Vapi's
-// authoritative result before falling back to the neutral "Call Ended" card.
+// Called at call-end. The server `/api/outcome` classifier is the SOURCE OF TRUTH:
+// it both recovers a missed outcome AND corrects a wrong live one (e.g. the in-call
+// model marks a confirmed-but-busy person P1, but the server returns P8). So we now
+// ALWAYS reconcile against the server — keeping the live result for instant UX while
+// it confirms in the background.
 async function finalizeResult() {
-  if (outcome) { renderResult(outcome); return; }
-  if (!currentCallId) { renderResult(null); return; }
+  if (!currentCallId) {
+    // No call id to look up — fall back to whatever the live tool gave us (or neutral).
+    renderResult(outcome);
+    return;
+  }
 
-  // Interim state while we confirm server-side (the analysis runs post-call).
-  inCall = false;
-  showStartButtonLoading(false);
-  app.dataset.state = "result";
-  app.dataset.tone = "";
-  outcomeBadge.className = "outcome-badge";
-  setStatus("⏳", "pending", "Finalizing…", "Just a moment while we confirm the result.", "");
+  if (outcome) {
+    // Instant UX: show the live result now (speech-end usually already did) while
+    // the server confirms it in the background. No jarring "Finalizing…" flash.
+    renderResult(outcome);
+  } else {
+    // No live outcome — show an interim state while the server classifies.
+    inCall = false;
+    showStartButtonLoading(false);
+    app.dataset.state = "result";
+    app.dataset.tone = "";
+    outcomeBadge.className = "outcome-badge";
+    setStatus("⏳", "pending", "Finalizing…", "Just a moment while we confirm the result.", "");
+  }
 
   const resolved = await pollServerOutcome(currentCallId);
-  // A late in-call outcome wins if one somehow arrived while we were polling.
-  renderResult(outcome || resolved);
+  if (resolved) {
+    // Server is authoritative — silently correct the card if it differs.
+    renderResult(resolved);
+  } else if (!outcome) {
+    // Nothing live and the server couldn't classify (or no backend) → neutral.
+    renderResult(null);
+  }
+  // else: server returned nothing but we already showed the live outcome — keep it.
 }
 
-// Poll the serverless resolver until it returns an outcome, says it can't, or we
+// Poll the serverless classifier until it returns an outcome, says it can't, or we
 // give up. Bails immediately if there's no backend (plain `vite dev` → 404).
 async function pollServerOutcome(callId, attempts = 8, delayMs = 3000) {
   for (let i = 0; i < attempts; i++) {
-    if (outcome) return outcome; // in-call result arrived late — stop polling
     try {
       const r = await fetch(`/api/outcome?callId=${encodeURIComponent(callId)}`);
       if (r.status === 404) return null;        // no backend deployed — don't hang the UI
       if (r.ok) {
         const data = await r.json();
         if (data?.outcome) return data.outcome;
-        if (!data?.pending) return null;         // analysis finished but couldn't classify
+        if (!data?.pending) return null;         // classified, but couldn't determine
       }
     } catch (err) {
       console.error("[outcome] server poll failed", err);

@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   OUTCOME_CONFIG,
+  OUTCOME_CODES,
   normalizeFirstName,
   parseArgs,
   describeError,
@@ -176,14 +177,13 @@ describe("safeJson", () => {
 
 // ─── OUTCOME_CONFIG completeness ─────────────────────────────────────────────
 describe("OUTCOME_CONFIG", () => {
-  const CODES = ["P1_SUCCESS", "P2_VOICEMAIL", "P3_UNREACHABLE", "P4_DECLINED", "P5_WRONG_PERSON", "P6_UNCLEAR"];
-
-  it("has an entry for all six set_outcome enum codes", () => {
-    for (const code of CODES) expect(OUTCOME_CONFIG[code]).toBeDefined();
+  it("has an entry for every taxonomy code (P1–P8)", () => {
+    expect(OUTCOME_CODES).toHaveLength(8);
+    for (const code of OUTCOME_CODES) expect(OUTCOME_CONFIG[code]).toBeDefined();
   });
 
   it("every entry has the fields the UI renders", () => {
-    for (const code of CODES) {
+    for (const code of OUTCOME_CODES) {
       const cfg = OUTCOME_CONFIG[code];
       expect(cfg).toMatchObject({
         label: expect.any(String),

@@ -12,7 +12,10 @@
     "build": "vite build",
     "preview": "vite preview",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "replay": "node scripts/replay-classify.mjs",
+    "dump-calls": "node scripts/dump-calls.mjs",
+    "diagnose": "node scripts/diagnose-last-call.mjs"
   },
   "dependencies": {
     "@vapi-ai/web": "^2.5.2"
