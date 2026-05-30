@@ -32,10 +32,22 @@ export const OUTCOME_CODES = [
 
 export const OUTCOME_SET = new Set(OUTCOME_CODES);
 
-// True only for a real, known outcome code. Used by the server to validate
-// anything coming back from the model / Vapi before trusting it.
+// The deliberate ABSTENTION state. NOT a P-code and NOT in OUTCOME_CODES (the agent
+// never emits it; it's never in the set_outcome / analysis enums). The deterministic
+// resolver returns it when the facts are missing, contradictory, or the transcript is
+// too garbled to trust — i.e. when we'd otherwise have to GUESS. Better to flag a call
+// for a human than to show a confident wrong code.
+export const NEEDS_REVIEW = "NEEDS_REVIEW";
+
+// True only for a real, known P-code the agent/Vapi can emit (excludes NEEDS_REVIEW).
+// Used by the server to validate anything coming back from the model / Vapi.
 export function isValidOutcome(code) {
   return typeof code === "string" && OUTCOME_SET.has(code);
+}
+
+// True for anything the UI can render (the 8 P-codes plus NEEDS_REVIEW).
+export function isDisplayable(code) {
+  return typeof code === "string" && Object.prototype.hasOwnProperty.call(OUTCOME_CONFIG, code);
 }
 
 // Outcome → display config. `cardState` reuses the existing orb/accent states
@@ -53,4 +65,5 @@ export const OUTCOME_CONFIG = {
   P6_UNCLEAR:           { label: "P6 · Unclear",        badge: "Couldn't Confirm",                   cls: "P6", icon: "🤔", cardState: "muted",     title: "Couldn't Confirm",        msg: "We reached someone, but couldn't confirm their identity." },
   P7_HUNGUP_EARLY:      { label: "P7 · Hung Up",        badge: "Ended Early",                         cls: "P7", icon: "📴", cardState: "muted",     title: "Call Dropped Early",      msg: "The call ended before identity could be confirmed." },
   P8_VERIFIED_NO_SURVEY:{ label: "P8 · Verified",       badge: "Identity Confirmed",                 cls: "P8", icon: "☑️", cardState: "neutral",   title: "Identity Confirmed",      msg: "Identity confirmed, but the survey wasn't completed." },
+  NEEDS_REVIEW:         { label: "Needs review",        badge: "Needs Review",                       cls: "REVIEW", icon: "🔎", cardState: "muted", title: "Needs Review",            msg: "We couldn't determine this call's outcome with confidence, so it's flagged for a human to review." },
 };

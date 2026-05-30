@@ -11,7 +11,8 @@
 // This endpoint only ever returns a P-code + metadata — no transcript, no PII.
 
 import { classify, heuristicEndReason, classifyWithFullPrompt } from "./classify.js";
-import { isValidOutcome } from "../src/outcomes.js";
+import { resolve, extractFacts, crossCheck } from "./resolve.js";
+import { isValidOutcome, isDisplayable } from "../src/outcomes.js";
 
 export default async function handler(req, res) {
   const key = process.env.VAPI_PRIVATE_KEY;
@@ -66,24 +67,29 @@ export default async function handler(req, res) {
     return res.status(200).json({ outcome: null, pending: true });
   }
 
-  // The live in-call set_outcome (if any) is passed to the classifier as a weak
-  // hint / tiebreaker — never as the answer on its own.
   const liveOutcome = extractFromMessages(call?.messages);
-
   const durationSec =
     call?.startedAt && call?.endedAt
       ? (new Date(call.endedAt) - new Date(call.startedAt)) / 1000
       : undefined;
 
-  // ─── Side-by-side comparison: the THREE independent signals ─────────────────
-  // 1) gpt4o   — the in-call set_outcome the live GPT-4o agent emitted.
-  // 2) vapi    — Vapi's own post-call analysis (analysisPlan.structuredDataPlan).
-  // 3) deepseek — a fresh DeepSeek pick given the FULL agent prompt + audio note.
-  // All three are just P-codes (no PII), for debugging/eval; the clean card still
-  // shows `outcome` (the authoritative classifier). Computed CONCURRENTLY with the
-  // authoritative classify() below so the extra LLM pass doesn't add wall-clock time.
+  // ─── AUTHORITATIVE: the deterministic resolver ──────────────────────────────
+  // Atomic facts (explicit fact tool calls, else derived from the transcript) +
+  // endedReason → exactly one P-code OR NEEDS_REVIEW. No LLM guessing here.
+  let result;
+  try {
+    result = resolve({ facts: extractFacts(call?.messages), transcript, endedReason });
+  } catch {
+    return res.status(502).json({ error: "Resolution failed." });
+  }
+
+  // ─── Cross-checks + the side-by-side comparison signals (concurrent) ─────────
+  // gpt4o = live set_outcome; vapi = Vapi's post-call analysis; deepseek = a fresh
+  // full-prompt DeepSeek pick. The ensemble classify() is the LLM cross-check. None
+  // of these can OVERRIDE the resolver — the cross-check can only RAISE needs-review
+  // when the resolver's result rests on an explicit FACT that it flatly contradicts.
   const comparePromise = (async () => {
-    const gpt4o = liveOutcome; // already extracted from the call's tool calls
+    const gpt4o = liveOutcome;
     const vapiRaw = call?.analysis?.structuredData?.outcome;
     const vapi = isValidOutcome(vapiRaw) ? vapiRaw : null;
     let deepseek = null;
@@ -95,32 +101,23 @@ export default async function handler(req, res) {
     }
     return { gpt4o, vapi, deepseek };
   })();
+  const crosscheckPromise = classify({ transcript, endedReason, durationSec, liveOutcome, messages: call?.messages })
+    .catch(() => null);
 
-  let result;
-  try {
-    result = await classify({
-      transcript,
-      endedReason,
-      durationSec,
-      liveOutcome,
-      messages: call?.messages,
-    });
-  } catch {
-    return res.status(502).json({ error: "Classification failed." });
-  }
+  let compare = null, crosscheck = null;
+  try { [compare, crosscheck] = await Promise.all([comparePromise, crosscheckPromise]); } catch { /* keep nulls */ }
 
-  // classify() always returns a valid code for an ended call, but guard anyway.
-  if (!result || !isValidOutcome(result.code)) {
+  if (crosscheck?.code) result = crossCheck(result, crosscheck.code);
+
+  if (!result || !isDisplayable(result.code)) {
     return res.status(200).json({ outcome: null, pending: false });
   }
-
-  let compare;
-  try { compare = await comparePromise; } catch { compare = null; }
 
   return res.status(200).json({
     outcome: result.code,
     source: result.source,
     confidence: result.confidence,
+    reason: result.reason,
     compare,
   });
 }
