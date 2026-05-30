@@ -53,6 +53,17 @@ function hasNegation(t) {
   return /(^|[.!?,]\s*)(no|nope|nah)\b/.test(t);
 }
 
+// An idle/presence-check nudge the agent uses when the line goes quiet. A bare "yeah"
+// answering one of these means "I'm here", NOT "I'm <name>".
+const NUDGE = /\byou (still )?there\b|\bstill with me\b|\b(still )?hear me\b|\bdid i lose you\b|\byou cut out\b|\bstill there\b|^hello\b\??$/i;
+// The agent's identity question.
+const IDENTITY_ASK = /\bis this\b|\bspeaking with\b|\bam i speaking\b|\bjust to confirm\b/i;
+// A BARE affirmation — only yes/yeah/yep/yup words (+ fillers), nothing substantive.
+function isBareAffirm(t) {
+  const words = String(t).replace(/[.,!?]/g, " ").split(/\s+/).filter(Boolean);
+  return words.length > 0 && words.every((w) => /^(yes|yeah|yep|yup|uh|um|oh)$/i.test(w));
+}
+
 function mk(code, confidence, source, reason) {
   return { code, confidence, source, reason };
 }
@@ -72,21 +83,39 @@ export function surveyResponse(transcript) {
   return null;
 }
 
-// The caller's turns BEFORE the survey question (the IDENTITY PHASE). Identity is
-// decided from these only — so a "no" in the survey ANSWER (which comes after the
-// survey question) can never be mistaken for an identity denial. If the survey was
-// never asked, every turn is identity phase.
-export function identityPhaseTurns(transcript) {
-  const lines = String(transcript || "").split(/\r?\n/).map((l) => l.trim());
-  let askedAt = -1;
+// Derive identity from the IDENTITY PHASE (turns before the survey question), using the
+// agent's PRECEDING line as context. Two key rules:
+//   • A "no" in the survey ANSWER (after the survey question) is never an identity denial.
+//   • A BARE "yeah" answering an idle nudge ("you there?") means "I'm here", NOT "I'm
+//     <name>", so it does NOT confirm identity. A bare yes only confirms when it answers
+//     the identity question; a substantive confirm ("it's me", "speaking") always counts.
+// Returns "confirmed" | "denied" | "contradiction" | undefined.
+export function deriveIdentity(transcript) {
+  const lines = String(transcript || "").split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  let surveyAt = lines.length;
   for (let i = 0; i < lines.length; i++) {
-    if (/^ai\s*:/i.test(lines[i]) && /(happy|neutral|upset|no comment)|pulse check|tariff/i.test(lines[i])) askedAt = i;
+    if (/^ai\s*:/i.test(lines[i]) && /(happy|neutral|upset|no comment)|pulse check|tariff/i.test(lines[i])) surveyAt = i;
   }
-  const end = askedAt < 0 ? lines.length : askedAt;
-  return lines.slice(0, end)
-    .filter((l) => /^user\s*:/i.test(l))
-    .map((l) => l.replace(/^user\s*:/i, "").trim().toLowerCase())
-    .filter(Boolean);
+  let confirmed = false, denied = false, prevAI = "";
+  for (let i = 0; i < surveyAt; i++) {
+    const line = lines[i];
+    if (/^ai\s*:/i.test(line)) { prevAI = line.replace(/^ai\s*:/i, "").trim().toLowerCase(); continue; }
+    if (!/^user\s*:/i.test(line)) continue;
+    const u = line.replace(/^user\s*:/i, "").trim().toLowerCase();
+    if (RX.denial.test(u) || hasNegation(u)) { denied = true; continue; }
+    if (!isConfirmTurn(u)) continue;
+    if (isBareAffirm(u)) {
+      // bare "yeah" — a confirmation ONLY if the agent's last line asked about identity
+      // (an idle "you there?" nudge with no identity ask does not count).
+      if (!(NUDGE.test(prevAI) && !IDENTITY_ASK.test(prevAI))) confirmed = true;
+    } else {
+      confirmed = true; // substantive confirmation
+    }
+  }
+  if (confirmed && denied) return "contradiction";
+  if (denied) return "denied";
+  if (confirmed) return "confirmed";
+  return undefined;
 }
 
 // Parse the agent's EXPLICIT fact tool calls out of the call's message log.
@@ -134,18 +163,13 @@ export function resolve({ facts = {}, transcript = "", endedReason = "" } = {}) 
     return mk("P3_UNREACHABLE", 0.95, "deterministic", "no caller audio / silence");
   }
 
-  // STEP 1 — establish identity (explicit fact wins; else derive). Derive ONLY from the
-  // IDENTITY PHASE (turns before the survey question) — a "no" in the survey ANSWER is a
-  // survey response, not an identity denial (e.g. "No, I'm happy" must not read as a deny).
+  // STEP 1 — establish identity (explicit fact wins; else derive from the identity phase
+  // with preceding-line context — see deriveIdentity).
   let identity = facts.identity; // "confirmed" | "denied" | undefined
   if (!identity) {
-    const idTurns = identityPhaseTurns(transcript);
-    const idText = idTurns.join("  ");
-    const hasConfirm = idTurns.some(isConfirmTurn);
-    const hasDeny = RX.denial.test(idText) || idTurns.some((t) => hasNegation(t));
-    if (hasConfirm && hasDeny) return mk("P6_UNCLEAR", 0.6, "derived", "contradictory identity: the caller both confirmed and denied");
-    if (hasDeny) identity = "denied";
-    else if (hasConfirm) identity = "confirmed";
+    const d = deriveIdentity(transcript);
+    if (d === "contradiction") return mk("P6_UNCLEAR", 0.6, "derived", "contradictory identity: the caller both confirmed and denied");
+    identity = d; // "confirmed" | "denied" | undefined
   }
 
   const src = Object.keys(facts).length ? "fact" : "derived";

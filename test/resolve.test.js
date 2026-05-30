@@ -74,6 +74,27 @@ describe("resolve — a 'no' in the SURVEY answer is not an identity denial (cal
   });
 });
 
+describe("resolve — a bare 'yeah' after an idle NUDGE is not identity confirmation (call 019e78b0)", () => {
+  it("'You there?' → 'Yeah' → 'I know this seems…' → P6, NOT P8 (identity never really confirmed)", () => {
+    const out = r(T(
+      "AI: is this Sam?", "User: Who's this?",
+      "AI: a quick survey — am I speaking with Sam?", "User: where'd you get my number?",
+      "AI: a public listing. You there?", "User: Yeah.",
+      SURVEY, "User: I know this seems",
+    ));
+    expect(out.code).toBe("P6_UNCLEAR");
+  });
+  it("a bare 'Yeah' DIRECTLY answering the identity question still confirms → P8/P1", () => {
+    const confirmed = r(T("AI: am I speaking with Sam?", "User: Yeah.", SURVEY, "User: I'm busy"));
+    expect(confirmed.code).toBe("P8_VERIFIED_NO_SURVEY");
+    const surveyed = r(T("AI: am I speaking with Sam?", "User: Yeah.", SURVEY, "User: pretty upset"));
+    expect(surveyed.code).toBe("P1_SUCCESS");
+  });
+  it("a SUBSTANTIVE confirm after a nudge still counts ('yeah, it's me')", () => {
+    expect(r(T("AI: is this Sam?", "AI: you there?", "User: yeah it's me", SURVEY, "User: happy")).code).toBe("P1_SUCCESS");
+  });
+});
+
 describe("resolve — never confirmed", () => {
   it("evasive + busy, never a yes/no → P6 (B1, call 3/14)", () => {
     expect(r(T("AI: is this Sam?", "User: who is this?", "AI: a survey — is this Sam?", "User: how'd you get my number?", "User: I'm busy")).code).toBe("P6_UNCLEAR");
