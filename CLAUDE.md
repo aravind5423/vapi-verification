@@ -3,96 +3,105 @@
 Guidance for working in this repo.
 
 ## What this is
-A **browser-based AI voice verification** app. A visitor enters their name, clicks Start, and has a live voice conversation with an AI agent ("Freya") **in the browser** via the Vapi Web SDK (`@vapi-ai/web`). Freya runs a short "pulse check" survey and records an outcome (`P1`–`P6`) that the page shows in real time. No phone calls, no Twilio — the call is WebRTC mic/speakers.
+A **browser-based AI voice identity-verification** app. A visitor enters their name, clicks Start, and has a live voice conversation with an AI agent ("Freya") **in the browser** via the Vapi Web SDK (`@vapi-ai/web`). Freya's primary job is to **verify identity** ("am I speaking with {{name}}?"); a one-question "pulse check" survey is secondary. After the call the page shows ONE clean outcome — one of `P1`–`P8`, or **`NEEDS_REVIEW`** when the result genuinely can't be trusted. No phone calls, no Twilio — the call is WebRTC mic/speakers.
+
+**Design philosophy for the outcome:** *correct when confident, `NEEDS_REVIEW` when genuinely unknowable, never confidently wrong.* The displayed result is decided by a **deterministic resolver**, not by an LLM guess.
 
 ## Architecture (read this first)
-- **Vite SPA + one tiny serverless function.** The UI is a static Vite SPA. There is **no database** and **no phone-calling backend** (the old one was removed — see git history). The **one** server-side piece is `api/outcome.js` (a Vercel function): a fallback that fetches a call's authoritative outcome from Vapi when the in-call `set_outcome` is missed. The happy path never touches it.
-- **The agent lives in the Vapi dashboard, not in this code.** The frontend only starts a dashboard assistant *by ID*. The system prompt, voice, tools, and `set_outcome` function are all configured on the Vapi assistant.
-  - To change agent behavior (prompt/voice/tools): edit the dashboard assistant, or re-run `scripts/configure-assistant.mjs`. **Do not look for the prompt in the frontend** — it isn't there.
-- **Outcome capture is client-side.** The dashboard assistant calls an **async** `set_outcome` tool; with the assistant's **clientMessages including `tool-calls`**, that arrives in the browser via `vapi.on('message')` and is read in `src/main.js`.
+- **Vite SPA + one tiny serverless function.** The UI is a static Vite SPA. There is **no database** and **no phone-calling backend**. The one server-side piece is `api/outcome.js` (a Vercel function): after the call it computes the **authoritative** outcome and the browser renders it.
+- **The agent lives in the Vapi dashboard, not in this code.** The frontend only starts a dashboard assistant *by ID*. The system prompt, voice, tools, and functions are all configured on the Vapi assistant. To change agent behavior: edit the dashboard assistant or re-run `scripts/configure-assistant.mjs`. **Do not look for the prompt in the frontend** — it isn't there.
+- **The outcome is RESOLVED server-side, not guessed.** The agent records facts during the call (and emits a `set_outcome` hint); `api/resolve.js` derives one code from atomic facts + `endedReason`, or abstains to `NEEDS_REVIEW`. The DeepSeek/Vapi classifiers are only a **cross-check** — they can raise `NEEDS_REVIEW`, never override a fact.
 
 ```
 Browser SPA  ──>  new Vapi(VITE_VAPI_PUBLIC_KEY)
              ──>  vapi.start(VITE_VAPI_ASSISTANT_ID, { variableValues: { name } })
-             ──>  vapi.on('message')  → set_outcome (P1–P6) captured
-             ──>  vapi.on('speech-end') → reveal the result card (when Freya finishes the goodbye)
-             ──>  vapi.on('volume-level' / 'call-start' / 'call-end' / 'error') → UI/state
-             ──>  call-end with NO set_outcome → GET /api/outcome?callId=… (server reads
-                  the call's set_outcome / analysis.structuredData) → render the P-code
+             ──>  live WebRTC conversation; the agent silently records facts/outcome
+             ──>  vapi.on('call-end')  → card shows "Wrapping up…" (NEVER the raw live outcome)
+             ──>  GET /api/outcome?callId=…  (poll, ~10s ceiling, bails fast on 5xx)
+                       └─ api/outcome.js: fetch call → resolve() → ONE code or NEEDS_REVIEW
+                                          (+ a 3-way "compare" debug panel)
+             ──>  render the single authoritative result — no flip, clean human label
 ```
 
-The **safety net** has two layers: (1) `analysisPlan.structuredDataPlan` on the assistant classifies every call from its transcript server-side (`call.analysis.structuredData.outcome`, 30s timeout); (2) `api/outcome.js` lets the browser read that (or a late `set_outcome`) when the live tool call is missed, so the on-screen result is robust without a model retry. Needs **`VAPI_PRIVATE_KEY`** as a Vercel **server** env var (never `VITE_`-prefixed). Local full-stack test: `vercel dev` (plain `vite dev` returns 404 for `/api/outcome`, and the client falls back to the neutral card).
+The **outcome pipeline** (in `api/outcome.js`):
+1. **`resolve()` (authoritative, `api/resolve.js`)** — atomic facts (explicit fact tool calls, else derived from the transcript) + `endedReason` → one P-code OR `NEEDS_REVIEW`. Pure, deterministic, no LLM.
+2. **Cross-check** — the DeepSeek ensemble (`api/classify.js`) runs concurrently; it can only *raise* `NEEDS_REVIEW` when it flatly contradicts an **explicit fact**.
+3. **Compare panel** — three independent signals for debugging only: `gpt4o` (live `set_outcome`), `vapi` (`analysis.structuredData`), `deepseek` (a full-prompt pick).
+
+Needs **`VAPI_PRIVATE_KEY`** (fetch the call) and **`DEEPSEEK_API_KEY`** (cross-check) as Vercel **server** env vars (never `VITE_`-prefixed). Local full-stack test: `vercel dev` (plain `vite dev` returns 404 for `/api/outcome`; the client then falls back to the live capture or a neutral card).
 
 ## Commands
 ```bash
-npm install           # install deps (@vapi-ai/web, vite)
+npm install           # deps (@vapi-ai/web, vite, vitest)
 npm run dev           # Vite dev server → http://localhost:5173
 npm run build         # production build → dist/
-npm run preview       # preview the production build
+npm test              # Vitest — 100 unit tests (utils + classify + resolve), fully offline
+npm run replay        # replay fixtures through the classifier (DeepSeek if key set, else heuristic)
+npm run diagnose      # pull recent real calls + print transcript, tools, analysis, resolver verdict
 
-# (Re)configure the dashboard assistant via the Vapi API — run with your PRIVATE key:
+# (Re)configure the dashboard assistant — HIGH STAKES: PATCHes the LIVE assistant, real calls cost money.
 #   PowerShell: $env:VAPI_PRIVATE_KEY="..."; $env:VAPI_ASSISTANT_ID="..."; node scripts/configure-assistant.mjs
 node scripts/configure-assistant.mjs
 ```
 
 ## Environment variables
-Both are **browser-safe** (public) and inlined by Vite **at build time**. They're **optional** — `src/main.js` has hardcoded fallbacks so the app deploys with zero config — but env vars override them when set (`.env.local` for dev, Vercel env for prod; rebuild/redeploy to change).
+`VITE_*` are **browser-safe** (public), inlined by Vite at build time, with hardcoded fallbacks in `src/main.js` (so it deploys with zero config; env vars override).
 
-| Var | What |
-|---|---|
-| `VITE_VAPI_PUBLIC_KEY` | Vapi **public** key (not the private key) |
-| `VITE_VAPI_ASSISTANT_ID` | The dashboard assistant's ID |
-
-The **private** key (`VAPI_PRIVATE_KEY`) is **server-side only** — never bundled, never committed. Three consumers: `scripts/configure-assistant.mjs` (PATCH the assistant), `scripts/diagnose-last-call.mjs` (reads it from `.env.local`), and the **`api/outcome.js`** serverless function (must be set in **Vercel** env for the live-UI fallback to work in prod).
-
-**`DEEPSEEK_API_KEY`** is also **server-side only** — it powers the outcome classifier in `api/classify.js` (read by `api/outcome.js`). It reads each call's transcript + `endedReason` and returns the authoritative P-code, so the result is robust even when the live `set_outcome` is missed or semantically wrong. Set it in **Vercel** env (and `.env.local` for `vercel dev`). Without it the classifier degrades to a deterministic keyword **heuristic floor** — lower accuracy, but it still always returns a valid code (never null for a completed call).
+| Var | Scope | What |
+|---|---|---|
+| `VITE_VAPI_PUBLIC_KEY` | public | Vapi **public** key |
+| `VITE_VAPI_ASSISTANT_ID` | public | the dashboard assistant's ID |
+| `VAPI_PRIVATE_KEY` | **server-only** | fetch the call in `api/outcome.js`; PATCH the assistant in the scripts. Must be set in **Vercel** env. |
+| `DEEPSEEK_API_KEY` | **server-only** | the DeepSeek cross-check + the compare panel. Without it the resolver still works (it's deterministic); only the LLM cross-check is skipped. |
 
 ## Outcome model
-| Code | Meaning | UI |
+| Code | Meaning | UI badge |
 |---|---|---|
-| `P1_SUCCESS` | Confirmed the right person | ✅ success |
-| `P2_VOICEMAIL` | Voicemail / machine | 📬 voicemail |
-| `P3_UNREACHABLE` | Couldn't connect / dead air | 📵 error |
-| `P4_DECLINED` | Reached the person but they declined / weren't interested / hostile | 🚫 warning |
-| `P5_WRONG_PERSON` | Reached someone, but wrong person / target unavailable | 🙅 neutral |
-| `P6_UNCLEAR` | Reached someone but couldn't determine (garbled / language / ambiguous) | 🤔 muted |
+| `P1_SUCCESS` | Confirmed the right person **and** they answered the survey | ✅ Verified & Surveyed |
+| `P2_VOICEMAIL` | Voicemail / answering machine | 📬 Voicemail |
+| `P3_UNREACHABLE` | No connection / dead air / no caller audio | 📵 No Answer |
+| `P4_DECLINED` | Reached them, declined / hostile / DNC (before confirming) | 🚫 Declined |
+| `P5_WRONG_PERSON` | Explicit "no" / wrong number / target unavailable | 🙅 Wrong Person |
+| `P6_UNCLEAR` | Reached someone but identity never confirmed (evasive/garbled) | 🤔 Couldn't Confirm |
+| `P7_HUNGUP_EARLY` | Hung up before confirming identity | 📴 Ended Early |
+| `P8_VERIFIED_NO_SURVEY` | Identity confirmed but survey not completed | ☑️ Identity Confirmed |
+| **`NEEDS_REVIEW`** | Facts missing / contradictory / too garbled to trust — **deliberate abstention** | 🔎 Needs Review |
+
+`NEEDS_REVIEW` is NOT in `OUTCOME_CODES` (the agent never emits it); it's a resolver output only, in `OUTCOME_CONFIG` so the UI renders it.
 
 ## File map
-- `index.html` — Vite entry. **Split-console layout** driven by `data-state` on `#app` (`idle`/`calling`/`result`): *idle* = two panes (hero + "how it works" steps | start-card form); *calling/result* = a single centered card (voice orb + status + Mute/End → outcome badge + retry). No live transcript (removed). Inline scripts **shim `window.global`/`window.process`** (for Daily.co) and provide the **on-page error banner** (`window.__showBootError` / `window.__clearBootError`).
-- `src/main.js` — all SDK logic: resolve the Vapi constructor (see gotchas); imports pure helpers from `src/utils.js`; **pre-warms the mic** (getUserMedia) before `vapi.start`; ~20s **connect timeout**; **double-submit guard** (`connecting` flag); captures `set_outcome` and reveals the result on the assistant's **`speech-end`** (so the UI doesn't flip before the goodbye finishes); on **`call-end` with no captured outcome** it calls **`/api/outcome`** (server-side fallback) and shows "Finalizing…" before the neutral card; volume-reactive orb (rAF-throttled); mute/end/retry; `data-state` machine; mic & error handling. Passes the **first name** as `{{name}}` and remembers the **call id** for the fallback.
-- `src/utils.js` — DOM-free, unit-tested helpers: `normalizeFirstName()` (strips titles like "Mr.Ara", Title-cases ALL-CAPS so TTS doesn't spell it, **keeps Unicode/accented/non-Latin names**, caps length), `parseArgs`, `describeError`, and `OUTCOME_CONFIG`. Tested in `src/utils.test.js` (Vitest, `npm test`).
-- `src/style.css` — styles (split-console grid, orb states, 6 outcome accents, responsive stack, reduced-motion).
-- `src/outcomes.js` — **single source of truth for the outcome taxonomy** (`OUTCOME_CODES`, `OUTCOME_SET`, `OUTCOME_CONFIG`, `isValidOutcome`). Imported by the frontend (`utils.js` re-exports it), the server (`api/*`), and the config script — so the codes can never drift across the three. P1–P6 + the newer **P7_HUNGUP_EARLY** (customer hung up before confirming) and **P8_VERIFIED_NO_SURVEY** (identity confirmed but survey not completed — fixes the old false-P1).
-- `api/outcome.js` — **Vercel serverless function** (the backend orchestrator). Given a `callId`, fetches the call from Vapi and runs `classify()` over its transcript + `endedReason`, returning the **authoritative** P-code (the live `set_outcome`, if any, is passed in only as a hint). Returns `{pending:true}` while the transcript is still populating. Validates the id (no SSRF), 8s upstream timeout, returns only a P-code (no PII), private key stays server-side.
-- `api/classify.js` — **the authoritative classifier** (pure, unit-testable). Three stacked layers, always returns a valid code for a completed call: (0) deterministic `endedReason`/transcript-shape terminals (voicemail→P2, silence/never-spoke→P3) that override the LLM; (1) a **DeepSeek ensemble** (3 parallel samples, majority vote) as the accuracy engine; (2) a keyword **heuristic floor** used when the LLM is unavailable/ties (needs `DEEPSEEK_API_KEY`); (3) reconcile with the live `set_outcome` hint as a tiebreaker. Only scans the **user's** transcript turns (matching Freya's words would false-positive).
-- `scripts/configure-assistant.mjs` — source of truth for the agent in code. PATCHes (or, with `VAPI_CREATE=1`, POSTs a new) assistant: system prompt (scenarios A–H + "extra nuances" incl. scam/identity-gate/state-aware re-confirm, + 6 absolute rules), **`temperature: 0.3`** (reliable tool-calling), `set_outcome` async tool (enum from `src/outcomes.js`, P1–P8) + `endCall` tool, **`maxTokens:150`** (caps monologues that correlate with dropped tool calls), `clientMessages`, voice (Cartesia `sonic-3.5` + `chunkPlan`, `backgroundSound:"off"`), `endCallPhrases`, silence handling, speaking plans, and **`analysisPlan.structuredDataPlan`** (30s, now **schema-only** — a custom `messages` array made Vapi silently skip it; this is only a 3rd-line backstop since `api/classify.js` is authoritative). Has a **model-candidate fallback loop** (prefers **`gpt-4o`** for reliable *native* tool-calling; chat-tuned snapshots like `gpt-5.2-chat-latest` sometimes *speak* the `set_outcome` call as gibberish, so they're last) + a `fetchWithTimeout` wrapper.
-- `scripts/diagnose-last-call.mjs` — pulls recent calls from the Vapi API (private key from `.env.local`) and prints each call's transcript, tool calls (incl. `set_outcome`), `endedReason`, `analysis.structuredData`, **and the verdict `api/classify.js` would produce for it** (uses the DeepSeek key if present, else the heuristic floor) — the tool for debugging outcome capture.
-- `scripts/dump-calls.mjs` — writes recent real calls to `test/fixtures/calls/*.json` (raw `{transcript, endedReason, durationSec, liveOutcome}`) for classifier regression replay. (`test/fixtures/calls/` is gitignored — may contain real transcripts.)
-- `scripts/replay-classify.mjs` (`npm run replay`) — replays the fixture corpus (the 8 real calls + synthetic edge cases in `test/fixtures/synthetic.json`, plus any dumped calls) through `classify()` and reports pass/fail vs. expected codes. **The primary proof the restructure fixes the lost/false outcomes** (e.g. confirmed-but-busy #3/#7/#8 now → P8, not a false P1). Heuristic-only without a key (informational); full **DeepSeek ensemble** with `DEEPSEEK_API_KEY` (fails on a strict miss).
-- `test/classify.test.js` — offline unit tests (Vitest, part of `npm test`) for the deterministic pre-filters + heuristic floor (no network/key needed). `test/fixtures/synthetic.json` — the asserted replay corpus.
-- `vite.config.js` — defines `global: globalThis` for the SDK. `vercel.json` — pins `framework: vite`, build → `dist/`.
-- `.env.example`.
+- `index.html` — Vite entry. **`data-state` machine** on `#app` (`idle`/`calling`/`result`). Inline scripts shim `window.global`/`window.process` (Daily.co) and the on-page error banner. Holds the collapsible **"Compare classifiers"** debug panel.
+- `src/main.js` — all SDK logic: resolve the Vapi constructor (see gotchas); pre-warm the mic; ~20s connect timeout; double-submit guard; capture the live `set_outcome` only as a **degradation fallback**; on `call-end` → `finalizeResult()` shows **"Wrapping up…"** then polls `/api/outcome` and renders the ONE authoritative result (no flip) + the compare panel; volume-reactive orb; `data-state` machine.
+- `src/outcomes.js` — **single source of truth for the taxonomy**: `OUTCOME_CODES` (P1–P8), `OUTCOME_SET`, `OUTCOME_CONFIG` (incl. `NEEDS_REVIEW`, with a clean `badge` label shown instead of the P-code), `isValidOutcome` (8 codes), `isDisplayable` (8 + `NEEDS_REVIEW`), `NEEDS_REVIEW`. Imported by frontend, `api/*`, and the config script so codes never drift.
+- `src/utils.js` — DOM-free helpers: `normalizeFirstName()`, `parseArgs`, `describeError`; re-exports the taxonomy. Tested in `src/utils.test.js`.
+- `src/style.css` — styles (orb states, 8 outcome accents + `.REVIEW`, the compare panel, no-flip card).
+- `api/resolve.js` — **THE AUTHORITATIVE RESOLVER** (pure, unit-tested). Two fact sources: explicit fact tool calls (`extractFacts`), else derived deterministically from the transcript. Maps facts + `endedReason` → one P-code or `NEEDS_REVIEW`. Abstains when a confirmed caller's survey reply is neither a clean sentiment nor a clean refusal, on contradictory confirm+deny, and on fact/transcript contradictions. `crossCheck()` raises `NEEDS_REVIEW` only on a fact-vs-LLM contradiction.
+- `api/outcome.js` — Vercel serverless orchestrator. Validates the id (no SSRF), fetches the call, runs `resolve()` (authoritative) + `classify()` cross-check + the compare signals concurrently, returns `{outcome, source, confidence, reason, compare}` (only codes — no PII). `{pending:true}` while the transcript populates.
+- `api/classify.js` — the **DeepSeek classifier**, now a **cross-check** (not authoritative). Layers: deterministic terminals → 3-sample ensemble (temp 0) with an identity-gate guard (P1/P8 require a confirmation token, else P6) → keyword heuristic floor. Also `classifyWithFullPrompt()` (the full-agent-prompt pick for the compare panel). Only scans the **user's** transcript turns.
+- `scripts/configure-assistant.mjs` — agent config source of truth. PATCHes the assistant: identity-verification-first system prompt (identity gate, persistence loop, real-world catalogue, 8 absolute rules incl. *suspicion-is-never-a-decline* and *never-echo-a-mis-heard-name*), `temperature:0.3`, `maxTokens:200`, `set_outcome` (P1–P8) + `endCall` + the **staged atomic fact tools** (`confirm_identity`, `wrong_person`, `record_survey`, `survey_declined`, `decline_call`, `mark_voicemail`), Cartesia voice, Deepgram nova-3 + **keyterm boosting**, `endCallPhrases`, silence/idle plan, `analysisPlan.structuredDataPlan` (schema-only). gpt-4o model-candidate fallback loop.
+- `scripts/diagnose-last-call.mjs` (`npm run diagnose`) — pulls recent calls and prints transcript + tool calls + `analysis.structuredData` + the verdict the pipeline would produce. The main debugging tool.
+- `scripts/dump-calls.mjs` / `scripts/replay-classify.mjs` (`npm run replay`) — write real calls to `test/fixtures/calls/*.json` (gitignored) and replay the fixture corpus.
+- `test/classify.test.js`, `test/resolve.test.js`, `src/utils.test.js` — 100 offline unit tests (`npm test`). `test/fixtures/synthetic.json` — the asserted classifier replay corpus.
+- `vite.config.js` (`global: globalThis`), `vercel.json` (`framework: vite` → `dist/`), `.env.example`.
 
 ## Deploy (Vercel)
-`vercel.json` pins `framework: vite` (`vite build` → `dist/`), so Vercel builds correctly **without** touching the project's Framework Preset. Thanks to the fallbacks in `src/main.js` it deploys with **no env vars**; set `VITE_*` env vars only to override the baked-in values. A push to `main` auto-deploys (Git-connected).
+`vercel.json` pins `framework: vite`. Push to `main` auto-deploys. Set `VAPI_PRIVATE_KEY` + `DEEPSEEK_API_KEY` as **server** env vars in Vercel for the outcome pipeline to work in prod.
 
 ## Gotchas
-- **`@vapi-ai/web` is CommonJS** (`module.exports = { default: VapiClass }`). A plain `import Vapi from '@vapi-ai/web'` double-unwraps in the production bundle → `"X.default is not a constructor"`. `src/main.js` therefore imports the namespace and walks to the real constructor. **Don't revert to the default import.**
-- **Daily.co (under the SDK) needs Node globals.** `index.html` shims `window.global`/`window.process` and `vite.config.js` defines `global: globalThis`. Without these the call errors when it starts.
-- **`clientMessages` must include `tool-calls`** on the assistant, or the browser never receives the outcome (the page then shows a neutral "Call Ended" with no P-code).
-- **`set_outcome` is async** (fire-and-forget) so the model doesn't block waiting for a server response that doesn't exist in this client-only setup.
-- **The result card renders on `speech-end`, not on `set_outcome`.** Capturing `set_outcome` only *stores* the outcome; `main.js` reveals it when Freya finishes the goodbye (`speech-end`), with a fallback timer + `call-end` as backstops. Rendering instantly on `set_outcome` made the UI flip before she stopped talking — don't do that.
-- **Never name-match the caller by ear.** Speech-to-text mangles names, so the prompt treats any "yes/speaking/this is me" as confirmed (P1) even if the spoken name differs from `{{name}}`; only an explicit denial → P5. (A past bug marked a confirmed person P5 because STT heard "Aravind" as "Taravan".)
-- **ALL-CAPS names get spelled out by TTS** ("N‑E‑E‑L…"). `main.js` `normalizeFirstName()` Title-cases the name before sending it; keep that.
-- **Two-mode call ending (don't merge them).** Scenarios with a spoken goodbye end via `endCallPhrases` (the agent says the line, which ends with a phrase like "have a good day", and Vapi hangs up *after* the utterance). The `endCall` **tool** is reserved for silent ends (voicemail/dead-air). Letting the model call the `endCall` tool right after a closing line **cuts off the final TTS** — that was the "voice glitches at the end" bug. The prompt in `configure-assistant.mjs` enforces this; keep it.
-- **`set_outcome` must be its OWN silent step BEFORE the spoken closing line — never combined into one reply.** gpt-4o is unreliable at emitting a tool call *and* spoken content in the same completion: when it produces the closing line it often **drops the tool call**, and because the line contains an `endCallPhrase` the call hangs up before `set_outcome` can fire → the browser shows the neutral "Call Ended" with no P-code. Real calls confirmed this (two confirmed/declined calls ended cleanly with **no** `set_outcome`). The spoken-ending instruction therefore orders it as: **Step 1 record the outcome silently, Step 2 speak the closing line** — mirroring the already-reliable silent-ending (set_outcome → endCall). Don't revert it to "say the outcome and the goodbye in one reply." To check live: `node scripts/diagnose-last-call.mjs` prints recent calls' transcript + tool calls + end reason (reads the **private** key from `.env.local`, never bundled).
-- **Two-layer outcome safety net (live tool call can never be 100%).** Primary = the in-call `set_outcome` (shows live). Backups: (1) `analysisPlan.structuredDataPlan` classifies *every* call from its transcript server-side into `call.analysis.structuredData.outcome` (its `timeoutSeconds` was **5s by default → bumped to 30s**, or it silently returns empty); (2) `api/outcome.js` lets the browser read that authoritative result on `call-end` when the live tool call was missed. The server-side analysis runs *after* the call and does **not** reach the live UI on its own — `api/outcome.js` is the bridge, and it needs `VAPI_PRIVATE_KEY` in Vercel.
-- **Model `temperature` is `0.3` on purpose.** Higher (the ~0.7+ default) made gpt-4o improvise goodbyes and skip the `set_outcome` tool. Keep it low for reliable scenario routing + tool-calling. (`maxTokens` is still unset — a known TODO if monologues appear.)
-- **Identity gate + state-aware re-confirm.** The prompt must NOT ask the survey question until an explicit "yes" (Rule 6), and once confirmed it must NEVER re-ask "is this {{name}}" (Rule 2 / Scenario B branch). A past bug surveyed before confirming and re-confirmed identity after a mid-call question — keep both guards.
-- **Silence is handled by `messagePlan.idleMessages`** (a varied pool) — after ~7s of quiet Freya nudges ("you still there?") up to twice, then the call ends at `silenceTimeoutSeconds`. Pure silence never invokes the model, so it ends with **no `set_outcome`** → neutral "Call Ended" (expected).
-- **Audio smoothness vs. latency:** `voice.chunkPlan.minCharacters` at **40** keeps TTS smooth. Lowering it (e.g. 20) shaves start-latency but causes **stutter/gaps on marginal networks** — get snappiness from `startSpeakingPlan.waitSeconds` (0.2) instead, and leave chunkPlan at 40.
-- **Voice is Cartesia `sonic-3.5`** (ElevenLabs was tried and reverted — it needed provider wiring and caused deploy/env churn). The active assistant is **`28fe3455…`**; the deployed `VITE_VAPI_ASSISTANT_ID` must point at a valid assistant or every call 400s ("assistant does not exist").
-- **Mic needs a secure context** — works on `localhost` and HTTPS (Vercel), not plain HTTP. If a user denied the mic, the browser won't re-prompt; they must re-allow it in site settings and reload.
-- **Debugging a failed call (server vs browser):** `POST https://api.vapi.ai/call/web` with the **public** key + `{ assistantId }` should return **201** with a `webCallUrl`. If that works, your key/assistant are fine and the failure is browser-side (mic/WebRTC). The on-page error banner shows the exact runtime error.
-- The **public key lets anyone on the page start (paid) calls** — restrict allowed origins to your domain in the Vapi dashboard for production.
-- A real end-to-end test needs a **mic + a human** — the voice call can't be driven headlessly; verify in a browser.
+- **`@vapi-ai/web` is CommonJS** (`module.exports = { default: VapiClass }`). A plain default import double-unwraps in the production bundle → `"X.default is not a constructor"`. `src/main.js` imports the namespace and walks to the real constructor. **Don't revert to the default import.**
+- **Daily.co (under the SDK) needs Node globals.** `index.html` shims `window.global`/`window.process` and `vite.config.js` defines `global: globalThis`. Without these the call errors at start.
+- **`clientMessages` must include `tool-calls`** on the assistant, or the browser never receives tool calls (the live `set_outcome` fallback + compare panel break).
+- **The result card is RESOLVED, not the live outcome.** `finalizeResult()` shows "Wrapping up…" then renders ONLY `/api/outcome`'s result. The live `set_outcome` is captured only as a fallback if the server is unreachable. (Earlier the live outcome was shown instantly and visibly *flipped* to the corrected one — that's why we wait for the authoritative result now.)
+- **The resolver ABSTAINS rather than guess.** A confirmed caller whose survey reply is neither a clean sentiment nor a clean refusal (e.g. "make up something", "not really sure", garbled "Local.") → `NEEDS_REVIEW`, not a confident `P1`. Don't "fix" this by forcing a code — abstention is the whole point. ~17% needs-review on the adversarial test corpus is expected; cooperative callers abstain far less.
+- **Resolver fact detection is strict on purpose.** "speaking" inside *"who is this speaking?"* is NOT a confirmation; a mid-turn "no" ("Yeah. No.") is a contradiction, not a yes. See `isConfirmTurn`/`hasNegation` in `api/resolve.js`. `surveyResponse()` keys off the survey question's wording — update it if the survey text changes.
+- **Atomic fact tools are STAGED, not live.** They're in `configure-assistant.mjs` and parsed by `extractFacts`, but the live assistant only gets them when the script is run — which needs a **supervised live test** (real calls cost money). The resolver works fine without them via transcript-derivation, so they're an additive upgrade.
+- **Never name-match the caller by ear.** STT mangles names; any "yes/speaking/this is me" is a confirmation even if the spoken name differs from `{{name}}`; only an explicit "no"/wrong number → P5. Rule 8 also forbids the agent from **echoing a mis-heard name** back.
+- **`set_outcome` must be its OWN silent step BEFORE the spoken closing line.** gpt-4o is unreliable at emitting a tool call *and* spoken content in one completion; the closing line contains an `endCallPhrase` that hangs up immediately. (The resolver's transcript-derivation is the safety net for when the live tool is dropped — confirmed common in real calls.)
+- **Two-mode call ending (don't merge them).** Spoken goodbyes end via `endCallPhrases`; the `endCall` **tool** is reserved for silent ends (voicemail/dead-air). Calling `endCall` right after a closing line cuts off the final TTS.
+- **Model `temperature` is `0.3`, `maxTokens` is `200`.** Higher temp made gpt-4o improvise and skip tools; the token cap stops monologues (which correlate with dropped tool calls) while leaving room for a reassurance + re-ask.
+- **Identity gate.** Never survey or record P1/P8 without an explicit, direct yes. A "yeah" buried in another question is not a yes. Once confirmed, never re-ask identity.
+- **Silence** is handled by `messagePlan.idleMessages` (nudge ~twice, then end at `silenceTimeoutSeconds`); a no-audio/silence terminal → P3 deterministically.
+- **Audio smoothness:** `voice.chunkPlan.minCharacters` at 40 keeps TTS smooth; get snappiness from `startSpeakingPlan.waitSeconds` (0.2), not by lowering it.
+- **Voice is Cartesia `sonic-3.5`.** The active assistant is **`28fe3455…`**; `VITE_VAPI_ASSISTANT_ID` must point at a valid assistant or every call 400s.
+- **Mic needs a secure context** (localhost or HTTPS). The public key lets anyone on the page start (paid) calls — restrict allowed origins to your domain for production.
+- A real end-to-end test needs a **mic + a human** — the voice call can't be driven headlessly. The *outcome resolver*, however, is fully testable offline (`npm test`, `npm run diagnose`).
