@@ -1,10 +1,10 @@
 import { describe, it, expect } from "vitest";
 import { resolve, extractFacts, crossCheck, surveyResponse } from "../api/resolve.js";
-import { isDisplayable, NEEDS_REVIEW } from "../src/outcomes.js";
+import { isDisplayable } from "../src/outcomes.js";
 
 // The resolver is fully deterministic and offline — no LLM, no network. These tests
-// pin every failure bucket from the Phase-1 evidence catalogue (the 30 real calls),
-// plus garbled/ambiguous/abstention cases and the future explicit-fact-tool path.
+// pin every failure bucket from the Phase-1 evidence catalogue (the 30 real calls).
+// Every completed call resolves to exactly one definite P-code — no abstention.
 
 const T = (...lines) => lines.join("\n");
 const SURVEY = "AI: On the new tariff policies, are you feeling happy, neutral, upset, or no comment?";
@@ -35,7 +35,7 @@ describe("resolve — confirmed but no real survey answer → P8", () => {
   });
 });
 
-describe("resolve — ABSTENTION to NEEDS_REVIEW (B4: over-confidence killers)", () => {
+describe("resolve — confirmed + ambiguous/garbled survey answer → P8 (definite, no abstention)", () => {
   const ambiguous = [
     ["'make up something' (call 4)", "I'm gonna make up something, can you be quick?"],
     ["'not really sure' (call 22)", "Not really sure."],
@@ -44,32 +44,30 @@ describe("resolve — ABSTENTION to NEEDS_REVIEW (B4: over-confidence killers)",
     ["'why should it matter' (call 1)", "I'm living in India, why should it even matter to me?"],
   ];
   for (const [name, resp] of ambiguous) {
-    it(`confirmed but survey response is ambiguous → review: ${name}`, () => {
+    it(`confirmed, unclear survey answer → P8 (identity confirmed): ${name}`, () => {
       const out = r(T("AI: is this Sam?", "User: yes", SURVEY, `User: ${resp}`));
-      expect(out.code).toBe(NEEDS_REVIEW);
-      expect(out.source).toBe("abstain");
+      expect(out.code).toBe("P8_VERIFIED_NO_SURVEY");
     });
   }
-  it("contradictory confirm+deny ('Yeah. No.') is never a confident verified code", () => {
+  it("an unclear survey answer must NEVER become a 'Verified & Surveyed' (P1 needs a clean sentiment)", () => {
+    expect(r(T("AI: is this Sam?", "User: yes", SURVEY, "User: Local.")).code).not.toBe("P1_SUCCESS");
+  });
+  it("contradictory confirm+deny ('Yeah. No.') → P5 (definite, never a verified code)", () => {
     const out = r(T("AI: is this Sam?", "User: Yeah. No."));
-    expect(["P5_WRONG_PERSON", NEEDS_REVIEW]).toContain(out.code);
-    expect(out.code).not.toBe("P1_SUCCESS");
-    expect(out.code).not.toBe("P8_VERIFIED_NO_SURVEY");
+    expect(out.code).toBe("P5_WRONG_PERSON");
   });
 });
 
 describe("resolve — a 'no' in the SURVEY answer is not an identity denial (call 019e7886 bug)", () => {
-  it("confirmed, then 'No, I'm happy' → P1 (not a false NEEDS_REVIEW)", () => {
+  it("confirmed, then 'No, I'm happy' → P1", () => {
     expect(r(T("AI: is this Sam?", "User: Yes.", SURVEY, "User: No, I'm happy actually.")).code).toBe("P1_SUCCESS");
   });
   it("confirmed, then 'No, I'm pretty upset about it' → P1", () => {
     expect(r(T("AI: is this Sam?", "User: yeah", SURVEY, "User: No, I'm pretty upset about it.")).code).toBe("P1_SUCCESS");
   });
-  it("confirmed, then a GARBLED 'No. US able. Than India.' → NEEDS_REVIEW for the RIGHT reason", () => {
+  it("confirmed, then a GARBLED 'No. US able. Than India.' → P8 (identity confirmed, survey unclear)", () => {
     const out = r(T("AI: is this Sam?", "User: Yes.", SURVEY, "User: No. US able. Than India."));
-    expect(out.code).toBe(NEEDS_REVIEW);
-    expect(out.reason).toMatch(/ambiguous/i);          // ambiguous survey response, NOT "contradictory identity"
-    expect(out.reason).not.toMatch(/contradictory/i);
+    expect(out.code).toBe("P8_VERIFIED_NO_SURVEY");
   });
   it("identity-phase 'Yeah. No.' still resolves to wrong person (no regression)", () => {
     expect(r(T("AI: is this Sam?", "User: Yeah. No.")).code).toBe("P5_WRONG_PERSON");
@@ -136,8 +134,8 @@ describe("resolve — explicit fact tools win over derived", () => {
   it("mark_voicemail fact → P2", () => {
     expect(r("AI: hi", "assistant-said-end-call-phrase", { voicemail: true }).code).toBe("P2_VOICEMAIL");
   });
-  it("a fact claiming the call progressed but NO caller audio → review (contradiction)", () => {
-    expect(r("", "silence-timed-out", { identity: "confirmed" }).code).toBe(NEEDS_REVIEW);
+  it("a fact claiming the call progressed but NO caller audio → P6 (definite)", () => {
+    expect(r("", "silence-timed-out", { identity: "confirmed" }).code).toBe("P6_UNCLEAR");
   });
 });
 
@@ -154,15 +152,10 @@ describe("extractFacts — parses the future fact tool calls", () => {
   });
 });
 
-describe("crossCheck — only raises review on a FACT-based contradiction", () => {
-  it("fact-based P1 contradicted by P5 → review", () => {
-    expect(crossCheck({ code: "P1_SUCCESS", source: "fact" }, "P5_WRONG_PERSON").code).toBe(NEEDS_REVIEW);
-  });
-  it("DERIVED P1 contradicted by P5 → unchanged (LLM reads the same transcript)", () => {
-    expect(crossCheck({ code: "P1_SUCCESS", source: "derived" }, "P5_WRONG_PERSON").code).toBe("P1_SUCCESS");
-  });
-  it("fact-based P1 agreeing with P8 (both verified) → unchanged", () => {
-    expect(crossCheck({ code: "P1_SUCCESS", source: "fact" }, "P8_VERIFIED_NO_SURVEY").code).toBe("P1_SUCCESS");
+describe("crossCheck — now a pass-through (resolver is the sole decider)", () => {
+  it("never overrides the resolver, even on a contradiction", () => {
+    expect(crossCheck({ code: "P1_SUCCESS", source: "fact" }, "P5_WRONG_PERSON").code).toBe("P1_SUCCESS");
+    expect(crossCheck({ code: "P8_VERIFIED_NO_SURVEY", source: "derived" }, "P6_UNCLEAR").code).toBe("P8_VERIFIED_NO_SURVEY");
   });
 });
 

@@ -10,8 +10,8 @@
 // The Vapi PRIVATE key lives in a server env var here (never bundled to the client).
 // This endpoint only ever returns a P-code + metadata — no transcript, no PII.
 
-import { classify, heuristicEndReason, classifyWithFullPrompt } from "./classify.js";
-import { resolve, extractFacts, crossCheck } from "./resolve.js";
+import { heuristicEndReason, classifyWithFullPrompt } from "./classify.js";
+import { resolve, extractFacts } from "./resolve.js";
 import { isValidOutcome, isDisplayable } from "../src/outcomes.js";
 
 export default async function handler(req, res) {
@@ -68,27 +68,25 @@ export default async function handler(req, res) {
   }
 
   const liveOutcome = extractFromMessages(call?.messages);
-  const durationSec =
-    call?.startedAt && call?.endedAt
-      ? (new Date(call.endedAt) - new Date(call.startedAt)) / 1000
-      : undefined;
 
   // ─── AUTHORITATIVE: the deterministic resolver ──────────────────────────────
   // Atomic facts (explicit fact tool calls, else derived from the transcript) +
-  // endedReason → exactly one P-code OR NEEDS_REVIEW. No LLM guessing here.
+  // endedReason → exactly one definite P-code. No LLM guessing, no abstention.
   let result;
   try {
     result = resolve({ facts: extractFacts(call?.messages), transcript, endedReason });
   } catch {
     return res.status(502).json({ error: "Resolution failed." });
   }
+  if (!result || !isDisplayable(result.code)) {
+    return res.status(200).json({ outcome: null, pending: false });
+  }
 
-  // ─── Cross-checks + the side-by-side comparison signals (concurrent) ─────────
+  // ─── Side-by-side comparison signals (debug panel only — never override the resolver)
   // gpt4o = live set_outcome; vapi = Vapi's post-call analysis; deepseek = a fresh
-  // full-prompt DeepSeek pick. The ensemble classify() is the LLM cross-check. None
-  // of these can OVERRIDE the resolver — the cross-check can only RAISE needs-review
-  // when the resolver's result rests on an explicit FACT that it flatly contradicts.
-  const comparePromise = (async () => {
+  // full-prompt DeepSeek pick.
+  let compare = null;
+  try {
     const gpt4o = liveOutcome;
     const vapiRaw = call?.analysis?.structuredData?.outcome;
     const vapi = isValidOutcome(vapiRaw) ? vapiRaw : null;
@@ -99,19 +97,8 @@ export default async function handler(req, res) {
       const ds = await classifyWithFullPrompt({ key: deepseekKey, transcript, agentPrompt });
       deepseek = ds?.code ?? null;
     }
-    return { gpt4o, vapi, deepseek };
-  })();
-  const crosscheckPromise = classify({ transcript, endedReason, durationSec, liveOutcome, messages: call?.messages })
-    .catch(() => null);
-
-  let compare = null, crosscheck = null;
-  try { [compare, crosscheck] = await Promise.all([comparePromise, crosscheckPromise]); } catch { /* keep nulls */ }
-
-  if (crosscheck?.code) result = crossCheck(result, crosscheck.code);
-
-  if (!result || !isDisplayable(result.code)) {
-    return res.status(200).json({ outcome: null, pending: false });
-  }
+    compare = { gpt4o, vapi, deepseek };
+  } catch { /* compare is best-effort */ }
 
   return res.status(200).json({
     outcome: result.code,

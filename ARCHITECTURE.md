@@ -12,9 +12,9 @@ This application lets a visitor confirm their identity by **talking to an AI age
 
 - **No telephony and no database.** The conversation runs over the browser's microphone and speakers using real-time web audio (WebRTC). Nothing about the caller is stored by this application.
 - **"Thick agent, thin app."** The AI persona, conversation, and voice all live in a managed cloud service (Vapi), not in our code. Our application is a lightweight web page plus one small server-side function.
-- **The result is *derived from facts*, not *guessed*.** Instead of asking an AI to "pick a result code" (which can be confidently wrong), the agent records simple facts as they happen, and a small deterministic program turns those facts into exactly one outcome. When the facts are missing, contradictory, or the audio was too garbled to trust, the system **deliberately says "Needs Review"** rather than show a confident-but-wrong answer.
+- **The result is *derived from facts*, not *guessed*.** Instead of asking an AI to "pick a result code" (which can be confidently wrong), the agent records simple facts as they happen, and a small deterministic program turns those facts into exactly one definite outcome.
 
-**The guiding principle:** *correct when confident, "Needs Review" when genuinely unknowable, never confidently wrong.* For a verification product, a wrong "Verified" is far more dangerous than an honest "we're not sure" — so the system is built to abstain.
+**The guiding principle:** every completed call resolves to one **definite, determinable** outcome — there's no "ask a human" step. Accuracy is preserved by mapping each case to its *honest* outcome: if we confirmed who the caller is but their survey answer was unclear, the result is **"Identity Confirmed"** (we did verify them) — never a fabricated "Verified & Surveyed". A clean "Verified & Surveyed" still requires a clear survey answer.
 
 **Business value:** zero-friction identity verification (no app install, no phone number), a very low operational footprint (no servers or databases to maintain), and a result you can actually trust — because the system flags uncertainty instead of hiding it.
 
@@ -72,7 +72,6 @@ Every completed call resolves to exactly one of these:
 | **Ended Early** | Hung up before confirming identity |
 | **Voicemail** | A voicemail or machine picked up |
 | **No Answer** | No connection, silence, or dead air |
-| **Needs Review** | The facts were missing, contradictory, or too garbled to trust — **a deliberate "we're not sure," flagged for a human** |
 
 The visitor only ever sees the plain-language label; an internal code is kept in logs for debugging. The same vocabulary is shared across the whole system so the labels never drift.
 
@@ -80,32 +79,30 @@ The visitor only ever sees the plain-language label; an internal code is kept in
 
 ## 5. How the Result Is Decided (the most important design decision)
 
-The earlier version of this app asked an AI to read the conversation and pick a result. The problem: on a garbled or ambiguous call, the AI would still answer with full confidence — and was sometimes **confidently wrong** (for example, marking someone "Verified" when they never actually confirmed). For a verification product, that's unacceptable.
+The earlier version of this app asked an AI to read the conversation and pick a result. The problem: on a garbled or ambiguous call, the AI would still answer with full confidence — and was sometimes **confidently wrong** (for example, marking someone "Verified & Surveyed" when they never actually answered). For a verification product, that's unacceptable.
 
-The current design fixes this with three ideas:
+The current design fixes this with two ideas:
 
 ### 1. Record facts, then derive the result by fixed rules
-The agent records simple, individually-checkable facts during the call (identity confirmed? survey answered? wrong person? voicemail?). A small **deterministic program** — not an AI — turns those facts into exactly one result. Simple facts are easy to get right; turning facts into a result is just a lookup table. There's no "guessing."
+The agent records simple, individually-checkable facts during the call (identity confirmed? survey answered? wrong person? voicemail?). A small **deterministic program** — not an AI — turns those facts into exactly one definite result. Simple facts are easy to get right; turning facts into a result is just a lookup table. There's no "guessing."
 
-### 2. Abstain instead of guessing
-When the facts are missing, contradict each other, or the speech-to-text was too garbled to trust, the program returns **"Needs Review"** instead of forcing a confident answer. *We would rather flag a call for a human than show a wrong result.* This is the single most important behavior in the system.
+### 2. Map every case to its *honest* outcome — never overstate
+Every call still resolves to a definite result, but the rules are conservative about what they claim. The strongest result, **"Verified & Surveyed,"** requires *both* a confirmed identity *and* a clear survey answer. If identity was confirmed but the survey answer was unclear or garbled, the result is the more modest **"Identity Confirmed"** — true and useful, without overstating. If the caller both confirmed and denied, it's **"Couldn't Confirm."** So the system is definite *and* accurate: it never invents a "success" out of an unintelligible answer.
 
-### 3. A second AI as a cross-check, never the decider
-A separate AI still reviews the transcript — but only as a **cross-check**. If it strongly disagrees with a recorded fact, it can *raise* a call to "Needs Review." It is **not allowed to override** the recorded facts. (The system also keeps a side-by-side "compare" view of three independent AI opinions, used purely for debugging and tuning.)
+(A separate AI still reviews each transcript, but only as a side-by-side **"compare" view** for debugging and tuning — it never decides the result.)
 
 ```
 Call ends
    │
    ├─ read the facts the agent recorded (and, if needed, infer them from the transcript)
    │
-   ├─ facts clear and consistent ─────────────▶ show the matching result
-   │
-   ├─ a second AI flatly contradicts a fact ──▶ show "Needs Review"
-   │
-   └─ facts missing / contradictory / garbled ▶ show "Needs Review"
+   ├─ confirmed + clear survey answer ─────────▶ Verified & Surveyed
+   ├─ confirmed + unclear/garbled answer ──────▶ Identity Confirmed (honest, not overstated)
+   ├─ explicit "no" / wrong number ────────────▶ Wrong Person
+   └─ never got a clear yes/no ────────────────▶ Couldn't Confirm
 ```
 
-**The takeaway for non-engineers:** the result you see is built from verifiable facts, double-checked by an independent AI, and — crucially — the system tells you when it isn't sure instead of pretending it is.
+**The takeaway for non-engineers:** every call gets a definite, determinable result built from verifiable facts — and the rules are written so the system is accurate by *under*-claiming (e.g. "Identity Confirmed") rather than inventing a confident success.
 
 ---
 
@@ -117,8 +114,8 @@ Call ends
 |-----------|----------------|
 | **The web page** | The name form, the live "call" view with the pulsing voice orb, and the final result card. One state switch drives three views: *idle → calling → result*. |
 | **Browser logic** | Starts the call, manages microphone permissions and timeouts, and — on call end — shows "Wrapping up…" then displays the one official result. |
-| **The outcome function** (server-side) | The brain of the result: reads the call's facts and transcript, derives one result by fixed rules (or "Needs Review"), runs the AI cross-check, and returns only a result label — never any personal data. |
-| **The resolver** | The small, fully-tested deterministic program inside the outcome function that maps facts → one result, with explicit "abstain" rules. |
+| **The outcome function** (server-side) | The brain of the result: reads the call's facts and transcript, derives one definite result by fixed rules, and returns only a result label — never any personal data. |
+| **The resolver** | The small, fully-tested deterministic program inside the outcome function that maps facts → exactly one definite result. |
 | **Configuration script** | The "source of truth in code" for the agent. Running it pushes the agent's persona, conversation, tools, and voice to the cloud service. |
 | **Diagnostics & test tools** | Pull recent real calls and show exactly what the system would decide and why; plus an automated test suite (100 tests) that proves the result logic offline, with no live calls. |
 
@@ -154,9 +151,8 @@ Call ends
 
 ## 9. Known Constraints (honest limitations)
 
-- **100% is not achievable — and we don't claim it.** Speech-to-text and AI voice are probabilistic. The achievable, product-grade bar is *correct when confident, "Needs Review" when not* — which is exactly what's built.
-- **Some calls will land in "Needs Review," by design.** That's the system being honest, not failing. On cooperative callers it's rare; on evasive/garbled calls it's the right answer.
-- **Speech-to-text can still mishear names.** We boost the key words and never let the agent repeat a mis-heard name back, but garbling is a real-world limit.
+- **100% is not achievable — and we don't claim it.** Speech-to-text and AI voice are probabilistic. The system guarantees a *definite* result on every call; it manages accuracy by under-claiming (e.g. "Identity Confirmed" rather than a fabricated "Verified & Surveyed") rather than overstating.
+- **Speech-to-text can still mishear names and answers.** We boost the key words and never let the agent repeat a mis-heard name back, but garbling is a real-world limit — a garbled survey answer lands as "Identity Confirmed," not a false "Verified & Surveyed".
 - **The new fact-recording on the agent is staged but not yet live.** The result logic already works by inferring the same facts from the transcript; turning on the agent's explicit fact-recording needs one supervised live test (real calls cost money).
 - **A true end-to-end test needs a human with a microphone.** The result logic itself, however, is fully tested automatically.
 
@@ -164,7 +160,7 @@ Call ends
 
 ## 10. One-Paragraph Summary
 
-A lightweight web page starts a cloud AI agent whose job is to verify a caller's identity. The agent records simple facts during the call, and a small deterministic program turns those facts into one trusted result — or, when the facts are missing or untrustworthy, into an honest "Needs Review" rather than a confident guess. A second AI double-checks but can never override the facts. The system stores no personal data, runs with no servers or databases of our own, and is built around one principle: be correct when it can be, and openly unsure when it can't — never confidently wrong.
+A lightweight web page starts a cloud AI agent whose job is to verify a caller's identity. The agent records simple facts during the call, and a small deterministic program turns those facts into exactly one definite, determinable result. The rules are conservative — the top result requires both a confirmed identity and a clear survey answer, so an unclear call lands as the honest "Identity Confirmed" rather than a fabricated success. The system stores no personal data, runs with no servers or databases of our own, and is built around one principle: every call gets a definite result, and accuracy is protected by under-claiming rather than overstating.
 
 ---
 

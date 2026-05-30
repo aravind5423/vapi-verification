@@ -3,14 +3,14 @@
 Guidance for working in this repo.
 
 ## What this is
-A **browser-based AI voice identity-verification** app. A visitor enters their name, clicks Start, and has a live voice conversation with an AI agent ("Freya") **in the browser** via the Vapi Web SDK (`@vapi-ai/web`). Freya's primary job is to **verify identity** ("am I speaking with {{name}}?"); a one-question "pulse check" survey is secondary. After the call the page shows ONE clean outcome — one of `P1`–`P8`, or **`NEEDS_REVIEW`** when the result genuinely can't be trusted. No phone calls, no Twilio — the call is WebRTC mic/speakers.
+A **browser-based AI voice identity-verification** app. A visitor enters their name, clicks Start, and has a live voice conversation with an AI agent ("Freya") **in the browser** via the Vapi Web SDK (`@vapi-ai/web`). Freya's primary job is to **verify identity** ("am I speaking with {{name}}?"); a one-question "pulse check" survey is secondary. After the call the page shows ONE clean, **definite** outcome — exactly one of `P1`–`P8`. No phone calls, no Twilio — the call is WebRTC mic/speakers.
 
-**Design philosophy for the outcome:** *correct when confident, `NEEDS_REVIEW` when genuinely unknowable, never confidently wrong.* The displayed result is decided by a **deterministic resolver**, not by an LLM guess.
+**Design philosophy for the outcome:** every completed call resolves to one definite code via a **deterministic resolver** (not an LLM guess). There is **no abstention / "needs review" state** — each rule maps to the honest determinable outcome (e.g. a confirmed caller with an unclear survey answer is **P8 "Identity Confirmed"**, never a guessed P1).
 
 ## Architecture (read this first)
 - **Vite SPA + one tiny serverless function.** The UI is a static Vite SPA. There is **no database** and **no phone-calling backend**. The one server-side piece is `api/outcome.js` (a Vercel function): after the call it computes the **authoritative** outcome and the browser renders it.
 - **The agent lives in the Vapi dashboard, not in this code.** The frontend only starts a dashboard assistant *by ID*. The system prompt, voice, tools, and functions are all configured on the Vapi assistant. To change agent behavior: edit the dashboard assistant or re-run `scripts/configure-assistant.mjs`. **Do not look for the prompt in the frontend** — it isn't there.
-- **The outcome is RESOLVED server-side, not guessed.** The agent records facts during the call (and emits a `set_outcome` hint); `api/resolve.js` derives one code from atomic facts + `endedReason`, or abstains to `NEEDS_REVIEW`. The DeepSeek/Vapi classifiers are only a **cross-check** — they can raise `NEEDS_REVIEW`, never override a fact.
+- **The outcome is RESOLVED server-side, not guessed.** The agent records facts during the call (and emits a `set_outcome` hint); `api/resolve.js` derives exactly one definite code (P1–P8) from atomic facts + `endedReason`. The DeepSeek/Vapi classifiers are NOT consulted for the decision — they remain only as the side-by-side compare panel.
 
 ```
 Browser SPA  ──>  new Vapi(VITE_VAPI_PUBLIC_KEY)
@@ -18,15 +18,14 @@ Browser SPA  ──>  new Vapi(VITE_VAPI_PUBLIC_KEY)
              ──>  live WebRTC conversation; the agent silently records facts/outcome
              ──>  vapi.on('call-end')  → card shows "Wrapping up…" (NEVER the raw live outcome)
              ──>  GET /api/outcome?callId=…  (poll, ~10s ceiling, bails fast on 5xx)
-                       └─ api/outcome.js: fetch call → resolve() → ONE code or NEEDS_REVIEW
+                       └─ api/outcome.js: fetch call → resolve() → ONE definite code (P1–P8)
                                           (+ a 3-way "compare" debug panel)
              ──>  render the single authoritative result — no flip, clean human label
 ```
 
 The **outcome pipeline** (in `api/outcome.js`):
-1. **`resolve()` (authoritative, `api/resolve.js`)** — atomic facts (explicit fact tool calls, else derived from the transcript) + `endedReason` → one P-code OR `NEEDS_REVIEW`. Pure, deterministic, no LLM.
-2. **Cross-check** — the DeepSeek ensemble (`api/classify.js`) runs concurrently; it can only *raise* `NEEDS_REVIEW` when it flatly contradicts an **explicit fact**.
-3. **Compare panel** — three independent signals for debugging only: `gpt4o` (live `set_outcome`), `vapi` (`analysis.structuredData`), `deepseek` (a full-prompt pick).
+1. **`resolve()` (authoritative, `api/resolve.js`)** — atomic facts (explicit fact tool calls, else derived from the transcript) + `endedReason` → exactly one definite P-code (P1–P8). Pure, deterministic, no LLM, no abstention.
+2. **Compare panel** — three independent signals for debugging only (they never affect the result): `gpt4o` (live `set_outcome`), `vapi` (`analysis.structuredData`), `deepseek` (a full-prompt pick).
 
 Needs **`VAPI_PRIVATE_KEY`** (fetch the call) and **`DEEPSEEK_API_KEY`** (cross-check) as Vercel **server** env vars (never `VITE_`-prefixed). Local full-stack test: `vercel dev` (plain `vite dev` returns 404 for `/api/outcome`; the client then falls back to the live capture or a neutral card).
 
@@ -64,18 +63,17 @@ node scripts/configure-assistant.mjs
 | `P5_WRONG_PERSON` | Explicit "no" / wrong number / target unavailable | 🙅 Wrong Person |
 | `P6_UNCLEAR` | Reached someone but identity never confirmed (evasive/garbled) | 🤔 Couldn't Confirm |
 | `P7_HUNGUP_EARLY` | Hung up before confirming identity | 📴 Ended Early |
-| `P8_VERIFIED_NO_SURVEY` | Identity confirmed but survey not completed | ☑️ Identity Confirmed |
-| **`NEEDS_REVIEW`** | Facts missing / contradictory / too garbled to trust — **deliberate abstention** | 🔎 Needs Review |
+| `P8_VERIFIED_NO_SURVEY` | Identity confirmed but survey not clearly completed (incl. an unclear/garbled survey answer) | ☑️ Identity Confirmed |
 
-`NEEDS_REVIEW` is NOT in `OUTCOME_CODES` (the agent never emits it); it's a resolver output only, in `OUTCOME_CONFIG` so the UI renders it.
+Every completed call resolves to exactly one of these 8. There is **no** "needs review" / abstention state (it was removed — the product requires a definite, determinable outcome on every call).
 
 ## File map
 - `index.html` — Vite entry. **`data-state` machine** on `#app` (`idle`/`calling`/`result`). Inline scripts shim `window.global`/`window.process` (Daily.co) and the on-page error banner. Holds the collapsible **"Compare classifiers"** debug panel.
 - `src/main.js` — all SDK logic: resolve the Vapi constructor (see gotchas); pre-warm the mic; ~20s connect timeout; double-submit guard; capture the live `set_outcome` only as a **degradation fallback**; on `call-end` → `finalizeResult()` shows **"Wrapping up…"** then polls `/api/outcome` and renders the ONE authoritative result (no flip) + the compare panel; volume-reactive orb; `data-state` machine.
-- `src/outcomes.js` — **single source of truth for the taxonomy**: `OUTCOME_CODES` (P1–P8), `OUTCOME_SET`, `OUTCOME_CONFIG` (incl. `NEEDS_REVIEW`, with a clean `badge` label shown instead of the P-code), `isValidOutcome` (8 codes), `isDisplayable` (8 + `NEEDS_REVIEW`), `NEEDS_REVIEW`. Imported by frontend, `api/*`, and the config script so codes never drift.
+- `src/outcomes.js` — **single source of truth for the taxonomy**: `OUTCOME_CODES` (P1–P8), `OUTCOME_SET`, `OUTCOME_CONFIG` (with a clean `badge` label shown instead of the P-code), `isValidOutcome`, `isDisplayable`. Imported by frontend, `api/*`, and the config script so codes never drift.
 - `src/utils.js` — DOM-free helpers: `normalizeFirstName()`, `parseArgs`, `describeError`; re-exports the taxonomy. Tested in `src/utils.test.js`.
 - `src/style.css` — styles (orb states, 8 outcome accents + `.REVIEW`, the compare panel, no-flip card).
-- `api/resolve.js` — **THE AUTHORITATIVE RESOLVER** (pure, unit-tested). Two fact sources: explicit fact tool calls (`extractFacts`), else derived deterministically from the transcript. Maps facts + `endedReason` → one P-code or `NEEDS_REVIEW`. Abstains when a confirmed caller's survey reply is neither a clean sentiment nor a clean refusal, on contradictory confirm+deny, and on fact/transcript contradictions. `crossCheck()` raises `NEEDS_REVIEW` only on a fact-vs-LLM contradiction.
+- `api/resolve.js` — **THE AUTHORITATIVE RESOLVER** (pure, unit-tested). Two fact sources: explicit fact tool calls (`extractFacts`), else derived deterministically from the transcript. Maps facts + `endedReason` → exactly one definite P-code (P1–P8). A confirmed caller with a clean sentiment → P1; confirmed with anything else (busy/declined/unclear/garbled) → P8; contradictory confirm+deny → P6. `crossCheck()` is a no-op pass-through (kept for the import surface).
 - `api/outcome.js` — Vercel serverless orchestrator. Validates the id (no SSRF), fetches the call, runs `resolve()` (authoritative) + `classify()` cross-check + the compare signals concurrently, returns `{outcome, source, confidence, reason, compare}` (only codes — no PII). `{pending:true}` while the transcript populates.
 - `api/classify.js` — the **DeepSeek classifier**, now a **cross-check** (not authoritative). Layers: deterministic terminals → 3-sample ensemble (temp 0) with an identity-gate guard (P1/P8 require a confirmation token, else P6) → keyword heuristic floor. Also `classifyWithFullPrompt()` (the full-agent-prompt pick for the compare panel). Only scans the **user's** transcript turns.
 - `scripts/configure-assistant.mjs` — agent config source of truth. PATCHes the assistant: identity-verification-first system prompt (identity gate, persistence loop, real-world catalogue, 8 absolute rules incl. *suspicion-is-never-a-decline* and *never-echo-a-mis-heard-name*), `temperature:0.3`, `maxTokens:200`, `set_outcome` (P1–P8) + `endCall` + the **staged atomic fact tools** (`confirm_identity`, `wrong_person`, `record_survey`, `survey_declined`, `decline_call`, `mark_voicemail`), Cartesia voice, Deepgram nova-3 + **keyterm boosting**, `endCallPhrases`, silence/idle plan, `analysisPlan.structuredDataPlan` (schema-only). gpt-4o model-candidate fallback loop.
@@ -92,7 +90,7 @@ node scripts/configure-assistant.mjs
 - **Daily.co (under the SDK) needs Node globals.** `index.html` shims `window.global`/`window.process` and `vite.config.js` defines `global: globalThis`. Without these the call errors at start.
 - **`clientMessages` must include `tool-calls`** on the assistant, or the browser never receives tool calls (the live `set_outcome` fallback + compare panel break).
 - **The result card is RESOLVED, not the live outcome.** `finalizeResult()` shows "Wrapping up…" then renders ONLY `/api/outcome`'s result. The live `set_outcome` is captured only as a fallback if the server is unreachable. (Earlier the live outcome was shown instantly and visibly *flipped* to the corrected one — that's why we wait for the authoritative result now.)
-- **The resolver ABSTAINS rather than guess.** A confirmed caller whose survey reply is neither a clean sentiment nor a clean refusal (e.g. "make up something", "not really sure", garbled "Local.") → `NEEDS_REVIEW`, not a confident `P1`. Don't "fix" this by forcing a code — abstention is the whole point. ~17% needs-review on the adversarial test corpus is expected; cooperative callers abstain far less.
+- **The resolver always returns a definite code (no abstention).** A confirmed caller whose survey reply is unclear/garbled (e.g. "make up something", "not really sure", garbled "Local.") → **P8 "Identity Confirmed"** (identity was verified; the survey just wasn't clearly completed). **P1 still requires a clean sentiment**, so an unintelligible reply never becomes a false "Verified & Surveyed". (A previous version abstained to a "needs review" state here — that was removed; the product requires a determinable outcome on every call.)
 - **Resolver fact detection is strict on purpose.** "speaking" inside *"who is this speaking?"* is NOT a confirmation; a mid-turn "no" ("Yeah. No.") is a contradiction, not a yes. See `isConfirmTurn`/`hasNegation` in `api/resolve.js`. `surveyResponse()` keys off the survey question's wording — update it if the survey text changes.
 - **Atomic fact tools are STAGED, not live.** They're in `configure-assistant.mjs` and parsed by `extractFacts`, but the live assistant only gets them when the script is run — which needs a **supervised live test** (real calls cost money). The resolver works fine without them via transcript-derivation, so they're an additive upgrade.
 - **Never name-match the caller by ear.** STT mangles names; any "yes/speaking/this is me" is a confirmation even if the spoken name differs from `{{name}}`; only an explicit "no"/wrong number → P5. Rule 8 also forbids the agent from **echoing a mis-heard name** back.

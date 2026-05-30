@@ -1,27 +1,25 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // The DETERMINISTIC OUTCOME RESOLVER — the authoritative outcome path.
 //
-// Philosophy (per the approved plan): don't GUESS a holistic P-code after the call.
-// Record/derive a few ATOMIC FACTS, then map facts → exactly one P-code by fixed
-// rules — OR abstain to NEEDS_REVIEW when the facts are missing, contradictory, or
-// the decisive turn is too ambiguous/garbled to trust. We would rather flag a call
-// for a human than show a confident wrong code.
+// Philosophy: don't GUESS a holistic P-code after the call. Record/derive a few
+// ATOMIC FACTS, then map facts → exactly ONE definite P-code by fixed rules. Every
+// completed call resolves to one of P1–P8 — there is no abstention / "needs review"
+// state. Each rule is the honest determinable outcome (e.g. a confirmed caller whose
+// survey answer is unclear is P8 "Identity Confirmed", never a guessed P1).
 //
 // Two fact sources, in order of trust:
 //   1. EXPLICIT fact tool calls the agent emits during the call (confirm_identity,
 //      wrong_person, record_survey, survey_declined, decline_call, mark_voicemail).
 //      Ground truth — once those tools are live on the assistant.
 //   2. DERIVED from the transcript with deterministic heuristics (works TODAY, before
-//      any agent change — this is what we validate against the 30 real calls).
+//      any agent change — validated against the 30 real calls).
 // Explicit facts always win over derived ones.
 //
-// The LLM classifiers (DeepSeek/Vapi) are NOT consulted here. They are a CROSS-CHECK
-// applied by the caller (api/outcome.js): they can only RAISE NEEDS_REVIEW when they
-// strongly contradict an explicit recorded fact — never override the resolver.
+// The LLM classifiers (DeepSeek/Vapi) are NOT consulted here — the resolver is the sole
+// decider. They remain only as the side-by-side compare panel in api/outcome.js.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { userTurns, heuristicEndReason } from "./classify.js";
-import { NEEDS_REVIEW } from "../src/outcomes.js";
 
 const RX = {
   // explicit "wrong person / not me / wrong number"
@@ -57,9 +55,6 @@ function hasNegation(t) {
 
 function mk(code, confidence, source, reason) {
   return { code, confidence, source, reason };
-}
-function review(reason) {
-  return { code: NEEDS_REVIEW, confidence: 0, source: "abstain", reason };
 }
 
 // Find the caller's reply to the survey question: locate the AI turn that asks the
@@ -131,10 +126,10 @@ export function resolve({ facts = {}, transcript = "", endedReason = "" } = {}) 
   }
   const term = heuristicEndReason(endedReason, transcript); // P2 voicemail / P3 silence-or-empty / null
   if (term && term.code === "P3_UNREACHABLE") {
-    // If an explicit fact claims the call progressed but there's no caller audio, that's
-    // a contradiction → review rather than silently calling it unreachable.
+    // If an explicit fact claims the call progressed but there's no caller audio, the two
+    // contradict — report it as "couldn't confirm" (a definite outcome), not unreachable.
     if (facts.identity === "confirmed" || facts.survey || facts.wrongPerson) {
-      return review("a recorded fact says the call progressed, but there is no caller audio");
+      return mk("P6_UNCLEAR", 0.6, "derived", "a recorded fact contradicts the lack of caller audio");
     }
     return mk("P3_UNREACHABLE", 0.95, "deterministic", "no caller audio / silence");
   }
@@ -148,7 +143,7 @@ export function resolve({ facts = {}, transcript = "", endedReason = "" } = {}) 
     const idText = idTurns.join("  ");
     const hasConfirm = idTurns.some(isConfirmTurn);
     const hasDeny = RX.denial.test(idText) || idTurns.some((t) => hasNegation(t));
-    if (hasConfirm && hasDeny) return review("contradictory identity: the caller both confirmed and denied");
+    if (hasConfirm && hasDeny) return mk("P6_UNCLEAR", 0.6, "derived", "contradictory identity: the caller both confirmed and denied");
     if (hasDeny) identity = "denied";
     else if (hasConfirm) identity = "confirmed";
   }
@@ -189,24 +184,15 @@ export function resolve({ facts = {}, transcript = "", endedReason = "" } = {}) 
     return mk("P8_VERIFIED_NO_SURVEY", 0.85, "derived", "confirmed, deferred/declined the survey");
   }
   // Confirmed, said SOMETHING to the survey, but it's neither a clean sentiment nor a
-  // clean refusal — genuinely ambiguous (garbled or a non-answer). ABSTAIN.
-  return review(`confirmed, but the survey response is ambiguous: "${resp}"`);
+  // clean refusal — garbled or a non-answer. Identity IS verified, so report P8 (we
+  // confirmed who they are; the survey just wasn't clearly completed). P1 still requires
+  // a clean sentiment, so an unintelligible reply never becomes a "Verified & Surveyed".
+  return mk("P8_VERIFIED_NO_SURVEY", 0.7, "derived", `confirmed; survey response unclear: "${resp}"`);
 }
 
-// Cross-check: given the resolver result and an independent LLM/Vapi code, decide
-// whether to RAISE needs-review. Only fires when the resolver result rests on an
-// EXPLICIT fact (high trust) and the cross-check flatly contradicts it on the
-// verified-vs-not axis. Never used to override a derived result (the LLM reads the
-// same transcript, so disagreement there is just noise).
-const VERIFIED = new Set(["P1_SUCCESS", "P8_VERIFIED_NO_SURVEY"]);
-const NOT_VERIFIED = new Set(["P5_WRONG_PERSON", "P6_UNCLEAR", "P7_HUNGUP_EARLY"]);
-export function crossCheck(result, otherCode) {
-  if (!result || result.source !== "fact" || !otherCode) return result;
-  const a = result.code, b = otherCode;
-  const contradicts =
-    (VERIFIED.has(a) && NOT_VERIFIED.has(b)) || (NOT_VERIFIED.has(a) && VERIFIED.has(b));
-  if (contradicts) {
-    return review(`recorded fact (${a}) contradicts the independent classifier (${b})`);
-  }
+// Cross-check is retained as a no-op pass-through: the resolver is now the sole
+// decider and always returns a definite code, so the LLM never overrides it. (The
+// DeepSeek/Vapi signals remain visible in the compare panel for debugging.)
+export function crossCheck(result /* , otherCode */) {
   return result;
 }
