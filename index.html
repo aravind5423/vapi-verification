@@ -72,6 +72,14 @@
           <button class="ctrl-btn danger" id="endBtn" type="button">End call</button>
         </div>
         <button class="retry-btn" id="retryBtn" type="button">↩ Start a new verification</button>
+
+        <!-- Debug/eval: the three classifiers side by side (hidden until a result) -->
+        <details class="compare-panel" id="comparePanel" style="display:none">
+          <summary>Compare classifiers</summary>
+          <div class="compare-row"><span class="compare-label">GPT‑4o (live)</span><span class="compare-val" id="cmpGpt">—</span></div>
+          <div class="compare-row"><span class="compare-label">Vapi analysis</span><span class="compare-val" id="cmpVapi">—</span></div>
+          <div class="compare-row"><span class="compare-label">DeepSeek (full prompt)</span><span class="compare-val" id="cmpDeep">—</span></div>
+        </details>
       </div>
     </section>
 

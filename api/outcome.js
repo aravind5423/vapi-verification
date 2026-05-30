@@ -10,7 +10,7 @@
 // The Vapi PRIVATE key lives in a server env var here (never bundled to the client).
 // This endpoint only ever returns a P-code + metadata — no transcript, no PII.
 
-import { classify, heuristicEndReason } from "./classify.js";
+import { classify, heuristicEndReason, classifyWithFullPrompt } from "./classify.js";
 import { isValidOutcome } from "../src/outcomes.js";
 
 export default async function handler(req, res) {
@@ -75,6 +75,27 @@ export default async function handler(req, res) {
       ? (new Date(call.endedAt) - new Date(call.startedAt)) / 1000
       : undefined;
 
+  // ─── Side-by-side comparison: the THREE independent signals ─────────────────
+  // 1) gpt4o   — the in-call set_outcome the live GPT-4o agent emitted.
+  // 2) vapi    — Vapi's own post-call analysis (analysisPlan.structuredDataPlan).
+  // 3) deepseek — a fresh DeepSeek pick given the FULL agent prompt + audio note.
+  // All three are just P-codes (no PII), for debugging/eval; the clean card still
+  // shows `outcome` (the authoritative classifier). Computed CONCURRENTLY with the
+  // authoritative classify() below so the extra LLM pass doesn't add wall-clock time.
+  const comparePromise = (async () => {
+    const gpt4o = liveOutcome; // already extracted from the call's tool calls
+    const vapiRaw = call?.analysis?.structuredData?.outcome;
+    const vapi = isValidOutcome(vapiRaw) ? vapiRaw : null;
+    let deepseek = null;
+    const deepseekKey = process.env.DEEPSEEK_API_KEY;
+    if (deepseekKey) {
+      const agentPrompt = await fetchAgentPrompt(call, key);
+      const ds = await classifyWithFullPrompt({ key: deepseekKey, transcript, agentPrompt });
+      deepseek = ds?.code ?? null;
+    }
+    return { gpt4o, vapi, deepseek };
+  })();
+
   let result;
   try {
     result = await classify({
@@ -93,11 +114,42 @@ export default async function handler(req, res) {
     return res.status(200).json({ outcome: null, pending: false });
   }
 
+  let compare;
+  try { compare = await comparePromise; } catch { compare = null; }
+
   return res.status(200).json({
     outcome: result.code,
     source: result.source,
     confidence: result.confidence,
+    compare,
   });
+}
+
+// Retrieve the calling agent's full system prompt — preferably from the call's
+// embedded assistant snapshot, else by fetching the assistant by id. Used to give
+// the DeepSeek comparison the COMPLETE agent instructions.
+async function fetchAgentPrompt(call, vapiKey) {
+  const sysOf = (a) => a?.model?.messages?.find((m) => m?.role === "system")?.content || null;
+  const snapshot = sysOf(call?.assistant);
+  if (snapshot) return snapshot;
+  const id = call?.assistantId;
+  if (!id || !/^[0-9a-fA-F-]{20,40}$/.test(id)) return null;
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 8000);
+    try {
+      const r = await fetch(`https://api.vapi.ai/assistant/${id}`, {
+        headers: { Authorization: `Bearer ${vapiKey}` },
+        signal: ctrl.signal,
+      });
+      if (!r.ok) return null;
+      return sysOf(await r.json());
+    } finally {
+      clearTimeout(t);
+    }
+  } catch {
+    return null;
+  }
 }
 
 // Pull any explicit set_outcome the in-call model emitted, from the call's message

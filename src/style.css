@@ -175,6 +175,20 @@ body {
 .outcome-badge.P7 { background: rgba(107,114,128,0.18);color: #d1d5db; border: 1px solid rgba(107,114,128,0.35); }
 .outcome-badge.P8 { background: rgba(56,189,248,0.15); color: #7dd3fc; border: 1px solid rgba(56,189,248,0.3); }
 
+/* Debug/eval comparison panel — the three classifiers side by side. */
+.compare-panel { width: 100%; max-width: 360px; margin-top: 18px; text-align: left;
+  background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 12px; padding: 10px 14px; }
+.compare-panel summary { cursor: pointer; font-size: 12px; font-weight: 600; letter-spacing: 0.3px;
+  color: #94a3b8; list-style: none; user-select: none; }
+.compare-panel summary::-webkit-details-marker { display: none; }
+.compare-panel summary::before { content: "▸ "; color: #64748b; }
+.compare-panel[open] summary::before { content: "▾ "; }
+.compare-row { display: flex; justify-content: space-between; align-items: center; gap: 12px;
+  padding: 7px 0; border-top: 1px solid rgba(255,255,255,0.06); font-size: 12.5px; }
+.compare-row:first-of-type { margin-top: 8px; }
+.compare-label { color: #94a3b8; }
+.compare-val { color: #e2e8f0; font-weight: 600; font-variant-numeric: tabular-nums; text-align: right; }
+
 .call-controls { gap: 10px; margin-top: 26px; width: 100%; max-width: 320px; }
 .ctrl-btn {
   flex: 1; padding: 12px; border-radius: 12px;

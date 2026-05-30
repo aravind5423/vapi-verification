@@ -39,6 +39,10 @@ const outcomeBadge= document.getElementById("outcomeBadge");
 const muteBtn     = document.getElementById("muteBtn");
 const endBtn      = document.getElementById("endBtn");
 const retryBtn    = document.getElementById("retryBtn");
+const comparePanel= document.getElementById("comparePanel");
+const cmpGpt      = document.getElementById("cmpGpt");
+const cmpVapi     = document.getElementById("cmpVapi");
+const cmpDeep     = document.getElementById("cmpDeep");
 
 // ─── State ───────────────────────────────────────────────────────────────────
 const vapi = (PUBLIC_KEY && Vapi) ? new Vapi(PUBLIC_KEY) : null;
@@ -79,6 +83,7 @@ function resetToIdle() {
   app.dataset.tone = "";
   outcomeBadge.className = "outcome-badge";
   outcomeBadge.textContent = "";
+  if (comparePanel) comparePanel.style.display = "none";
   nameError.style.display = "none";
   nameInput.classList.remove("error-input");
   muteBtn.classList.remove("muted");
@@ -108,6 +113,24 @@ function renderResult(code) {
   }
 }
 
+// Populate the side-by-side comparison panel with the three independent signals.
+// `compare` is { gpt4o, vapi, deepseek } (each a P-code or null). Hidden when absent.
+function renderCompare(compare) {
+  if (!comparePanel) return;
+  if (!compare) { comparePanel.style.display = "none"; return; }
+  const set = (el, code) => {
+    if (!el) return;
+    const cfg = code && OUTCOME_CONFIG[code];
+    el.textContent = cfg ? `${code} · ${cfg.badge}` : "—";
+    el.dataset.code = code || "";
+  };
+  set(cmpGpt, compare.gpt4o);
+  set(cmpVapi, compare.vapi);
+  set(cmpDeep, compare.deepseek);
+  console.info("[compare]", compare);
+  comparePanel.style.display = "block";
+}
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // Called at call-end. The server `/api/outcome` classifier is the SINGLE SOURCE OF
@@ -124,10 +147,17 @@ async function finalizeResult() {
   outcomeBadge.className = "outcome-badge";
   setStatus("⏳", "pending", "Wrapping up…", "Just a moment while we confirm the result.", "");
 
-  const resolved = currentCallId ? await pollServerOutcome(currentCallId) : null;
-  if (resolved)     renderResult(resolved);   // the ONE authoritative outcome
-  else if (outcome) renderResult(outcome);    // server unreachable → fall back to live capture
-  else              renderResult(null);        // nothing at all → neutral "Call Ended"
+  const data = currentCallId ? await pollServerOutcome(currentCallId) : null;
+  if (data?.outcome) {
+    renderResult(data.outcome);   // the ONE authoritative outcome (clean card)
+    renderCompare(data.compare);  // + the three signals side by side (debug panel)
+  } else if (outcome) {
+    renderResult(outcome);        // server unreachable → fall back to live capture
+    renderCompare(null);
+  } else {
+    renderResult(null);           // nothing at all → neutral "Call Ended"
+    renderCompare(null);
+  }
 }
 
 // Poll the serverless classifier until it returns an outcome, says it can't, or we
@@ -141,7 +171,7 @@ async function pollServerOutcome(callId, attempts = 5, delayMs = 2500) {
       if (r.status >= 500) return null;         // server misconfigured (e.g. no private key) — bail fast
       if (r.ok) {
         const data = await r.json();
-        if (data?.outcome) return data.outcome;
+        if (data?.outcome) return data;          // full payload (outcome + compare)
         if (!data?.pending) return null;         // classified, but couldn't determine
       }
     } catch (err) {

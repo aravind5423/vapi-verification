@@ -219,6 +219,55 @@ export async function classifyWithLLM(input) {
   return { code: topCode, confidence: topVotes / codes.length, votes: codes.length };
 }
 
+// ─── Independent "full-context" classifier (for the side-by-side comparison) ──
+// A SINGLE DeepSeek pick that receives the COMPLETE agent (Freya) instructions, an
+// explicit note that the transcript is speech-to-text from a live audio call, and the
+// outcome options — then returns one code. This is intentionally separate from the
+// ensemble above: it's one of the three signals shown side by side for debugging, not
+// the authoritative result. Returns { code, reason } or null.
+export async function classifyWithFullPrompt({ key, transcript, agentPrompt }) {
+  if (!key) return null;
+  const system =
+    "You are reviewing a COMPLETED phone call to decide its single outcome.\n" +
+    "IMPORTANT: the transcript below is an AUTOMATED SPEECH-TO-TEXT transcription of a " +
+    "live audio call, so words — and especially names — may be garbled or misheard. " +
+    "Judge intent, not exact spelling (a 'yes' confirms identity even if the name sounds off).\n\n" +
+    "The calling agent was given these EXACT instructions:\n" +
+    "<<<AGENT_INSTRUCTIONS\n" + (agentPrompt || "(agent instructions unavailable)") + "\nAGENT_INSTRUCTIONS>>>\n\n" +
+    "Based ONLY on what actually happened in the transcript, choose EXACTLY ONE outcome code:\n\n" +
+    definitionsBlock() +
+    `\n\nValid codes: ${OUTCOME_CODES.join(", ")}.\n` +
+    'Respond with STRICT JSON only: {"code":"<ONE_CODE>","reason":"<short justification>"}';
+
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), LLM_TIMEOUT_MS);
+  try {
+    const resp = await fetch(DEEPSEEK_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
+      signal: ctrl.signal,
+      body: JSON.stringify({
+        model: DEEPSEEK_MODEL,
+        temperature: 0.0,
+        response_format: { type: "json_object" },
+        messages: [
+          { role: "system", content: system },
+          { role: "user", content: `TRANSCRIPT (audio call, speech-to-text):\n${transcript || "(empty)"}` },
+        ],
+      }),
+    });
+    if (!resp.ok) throw new Error(`deepseek ${resp.status}`);
+    const data = await resp.json();
+    const content = data?.choices?.[0]?.message?.content;
+    const parsed = typeof content === "string" ? JSON.parse(content) : content;
+    return isValidOutcome(parsed?.code) ? { code: parsed.code, reason: parsed?.reason ?? "" } : null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(t);
+  }
+}
+
 // ─── Orchestration ────────────────────────────────────────────────────────────
 
 // classify(): the single entry point. Always resolves to { code, confidence,
