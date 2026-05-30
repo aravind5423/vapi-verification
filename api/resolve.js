@@ -77,6 +77,23 @@ export function surveyResponse(transcript) {
   return null;
 }
 
+// The caller's turns BEFORE the survey question (the IDENTITY PHASE). Identity is
+// decided from these only — so a "no" in the survey ANSWER (which comes after the
+// survey question) can never be mistaken for an identity denial. If the survey was
+// never asked, every turn is identity phase.
+export function identityPhaseTurns(transcript) {
+  const lines = String(transcript || "").split(/\r?\n/).map((l) => l.trim());
+  let askedAt = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (/^ai\s*:/i.test(lines[i]) && /(happy|neutral|upset|no comment)|pulse check|tariff/i.test(lines[i])) askedAt = i;
+  }
+  const end = askedAt < 0 ? lines.length : askedAt;
+  return lines.slice(0, end)
+    .filter((l) => /^user\s*:/i.test(l))
+    .map((l) => l.replace(/^user\s*:/i, "").trim().toLowerCase())
+    .filter(Boolean);
+}
+
 // Parse the agent's EXPLICIT fact tool calls out of the call's message log.
 // Returns a partial facts object; empty today (the tools aren't live yet) — the
 // resolver then derives facts from the transcript instead.
@@ -122,11 +139,15 @@ export function resolve({ facts = {}, transcript = "", endedReason = "" } = {}) 
     return mk("P3_UNREACHABLE", 0.95, "deterministic", "no caller audio / silence");
   }
 
-  // STEP 1 — establish identity (explicit fact wins; else derive).
+  // STEP 1 — establish identity (explicit fact wins; else derive). Derive ONLY from the
+  // IDENTITY PHASE (turns before the survey question) — a "no" in the survey ANSWER is a
+  // survey response, not an identity denial (e.g. "No, I'm happy" must not read as a deny).
   let identity = facts.identity; // "confirmed" | "denied" | undefined
   if (!identity) {
-    const hasConfirm = turns.some(isConfirmTurn);
-    const hasDeny = RX.denial.test(text) || turns.some((t) => hasNegation(t));
+    const idTurns = identityPhaseTurns(transcript);
+    const idText = idTurns.join("  ");
+    const hasConfirm = idTurns.some(isConfirmTurn);
+    const hasDeny = RX.denial.test(idText) || idTurns.some((t) => hasNegation(t));
     if (hasConfirm && hasDeny) return review("contradictory identity: the caller both confirmed and denied");
     if (hasDeny) identity = "denied";
     else if (hasConfirm) identity = "confirmed";

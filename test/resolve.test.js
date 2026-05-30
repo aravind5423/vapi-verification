@@ -58,6 +58,24 @@ describe("resolve — ABSTENTION to NEEDS_REVIEW (B4: over-confidence killers)",
   });
 });
 
+describe("resolve — a 'no' in the SURVEY answer is not an identity denial (call 019e7886 bug)", () => {
+  it("confirmed, then 'No, I'm happy' → P1 (not a false NEEDS_REVIEW)", () => {
+    expect(r(T("AI: is this Sam?", "User: Yes.", SURVEY, "User: No, I'm happy actually.")).code).toBe("P1_SUCCESS");
+  });
+  it("confirmed, then 'No, I'm pretty upset about it' → P1", () => {
+    expect(r(T("AI: is this Sam?", "User: yeah", SURVEY, "User: No, I'm pretty upset about it.")).code).toBe("P1_SUCCESS");
+  });
+  it("confirmed, then a GARBLED 'No. US able. Than India.' → NEEDS_REVIEW for the RIGHT reason", () => {
+    const out = r(T("AI: is this Sam?", "User: Yes.", SURVEY, "User: No. US able. Than India."));
+    expect(out.code).toBe(NEEDS_REVIEW);
+    expect(out.reason).toMatch(/ambiguous/i);          // ambiguous survey response, NOT "contradictory identity"
+    expect(out.reason).not.toMatch(/contradictory/i);
+  });
+  it("identity-phase 'Yeah. No.' still resolves to wrong person (no regression)", () => {
+    expect(r(T("AI: is this Sam?", "User: Yeah. No.")).code).toBe("P5_WRONG_PERSON");
+  });
+});
+
 describe("resolve — never confirmed", () => {
   it("evasive + busy, never a yes/no → P6 (B1, call 3/14)", () => {
     expect(r(T("AI: is this Sam?", "User: who is this?", "AI: a survey — is this Sam?", "User: how'd you get my number?", "User: I'm busy")).code).toBe("P6_UNCLEAR");
